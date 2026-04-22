@@ -6,6 +6,12 @@ from contextlib import asynccontextmanager
 import uvicorn, os, traceback, asyncio
 from datetime import datetime, timezone, timedelta
 
+# Make FastAPI/Pydantic serialise all naive datetimes as UTC (append Z).
+# This ensures the browser's `new Date("…Z")` parses them as UTC so the
+# frontend's `timeZone:'Asia/Kolkata'` formatter converts correctly to IST.
+from fastapi.encoders import ENCODERS_BY_TYPE as _EBT
+_EBT[datetime] = lambda v: v.isoformat() + 'Z'
+
 # Load .env file — no external library needed
 def _load_dotenv():
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -27,6 +33,23 @@ try:
     Base.metadata.create_all(bind=engine)
 except Exception as e:
     print("DB create error:", e)
+
+
+def _migrate_user_columns():
+    """Add columns to users table introduced after initial schema creation."""
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(
+                __import__('sqlalchemy').text("PRAGMA table_info(users)")
+            )}
+            if "profile_picture" not in existing:
+                conn.execute(__import__('sqlalchemy').text(
+                    "ALTER TABLE users ADD COLUMN profile_picture TEXT"
+                ))
+                print("DB migration: added column users.profile_picture")
+            conn.commit()
+    except Exception:
+        print("User column migration error:", traceback.format_exc())
 
 
 def _migrate_document_columns():
@@ -152,11 +175,22 @@ async def _deletion_job_scheduler():
             print("Deletion scheduler error:", traceback.format_exc())
 
 
+def _migrate_new_tables():
+    """Create tables introduced after initial schema (file_access_logs, workflow_history_snapshots)."""
+    try:
+        import models as _m
+        _m.Base.metadata.create_all(bind=engine)
+    except Exception:
+        print("New table migration error:", traceback.format_exc())
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _migrate_user_columns()
     _migrate_document_columns()
     _migrate_doctype_schemas()
     _sync_document_core_fields()
+    _migrate_new_tables()
     asyncio.create_task(_deletion_job_scheduler())
     yield
 

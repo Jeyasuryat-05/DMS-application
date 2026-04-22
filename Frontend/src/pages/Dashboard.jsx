@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { reportsAPI, documentsAPI, adminAPI } from '../api'
 import { Metric, Card, Badge, Spinner, SectionHead, Btn } from '../components/ui'
 import { useAuth } from '../hooks/useAuth'
+import { fmtDate, istHour } from '../utils/dates'
 import {
   BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
   AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis,
@@ -80,7 +81,7 @@ export default function Dashboard() {
 
   if (loading) return <div style={{ padding: 32 }}><Spinner /></div>
 
-  const hour = new Date().getHours()
+  const hour = istHour()
   const greeting = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'
 
   return (
@@ -93,7 +94,7 @@ export default function Dashboard() {
             Good {greeting}, {user?.name?.split(' ')[0]} 👋
           </h1>
           <p style={{ margin: 0, color: '#6b7280', fontSize: 14 }}>
-            {new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            {fmtDate(new Date(), { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
         </div>
 
@@ -303,7 +304,7 @@ export default function Dashboard() {
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', gap: 10, alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: '#A32D2D', fontWeight: 600 }}>
-                    {new Date(d.expiry_date).toLocaleDateString('en-IN')}
+                    {fmtDate(d.expiry_date)}
                   </span>
                   <Badge label={d.status} />
                 </div>
@@ -606,7 +607,7 @@ function ExpiringList({ items, nav }) {
       </div>
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
         <div style={{ fontSize: 11, color: '#A32D2D', fontWeight: 600 }}>
-          {new Date(d.expiry_date).toLocaleDateString('en-IN')}
+          {fmtDate(d.expiry_date)}
         </div>
         <Badge label={d.status} />
       </div>

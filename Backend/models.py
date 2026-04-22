@@ -81,12 +81,13 @@ class User(Base):
     can_delete      = Column(Boolean, default=False)
     can_read        = Column(Boolean, default=True)
     auth_codes      = Column(String(500), default="")
-    hashed_password = Column(String(200), nullable=True)
-    is_active       = Column(Boolean, default=True)
-    is_sso_user     = Column(Boolean, default=False)
-    sso_name_id     = Column(String(300), nullable=True)
-    last_login      = Column(DateTime(timezone=True), nullable=True)
-    created_at      = Column(DateTime(timezone=True), server_default=func.now())
+    hashed_password  = Column(String(200), nullable=True)
+    is_active        = Column(Boolean, default=True)
+    is_sso_user      = Column(Boolean, default=False)
+    sso_name_id      = Column(String(300), nullable=True)
+    last_login       = Column(DateTime(timezone=True), nullable=True)
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+    profile_picture  = Column(String(500), nullable=True)
 
     documents_created = relationship("Document", back_populates="creator", foreign_keys="Document.creator_id")
     audit_entries     = relationship("AuditLog", back_populates="user")
@@ -284,6 +285,32 @@ class AuditLog(Base):
     timestamp   = Column(DateTime(timezone=True), server_default=func.now())
     document    = relationship("Document", back_populates="audit_logs")
     user        = relationship("User", back_populates="audit_entries")
+
+
+class FileAccessLog(Base):
+    __tablename__ = "file_access_logs"
+    id          = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id"))
+    file_id     = Column(Integer, ForeignKey("document_files.id"))
+    user_id     = Column(Integer, ForeignKey("users.id"))
+    action      = Column(String(20))   # "view" or "download"
+    accessed_at = Column(DateTime(timezone=True), server_default=func.now())
+    file        = relationship("DocumentFile")
+    user        = relationship("User")
+
+
+class WorkflowHistorySnapshot(Base):
+    __tablename__ = "workflow_history_snapshots"
+    id           = Column(Integer, primary_key=True)
+    document_id  = Column(Integer, ForeignKey("documents.id"))
+    outcome      = Column(String(20))  # "rejected" or "released"
+    rejected_at_stage = Column(String(30), nullable=True)
+    rejection_note    = Column(Text, nullable=True)
+    snapshot_at  = Column(DateTime(timezone=True), server_default=func.now())
+    initiated_at = Column(DateTime(timezone=True), nullable=True)
+    mode         = Column(String(30), nullable=True)
+    snapshot     = Column(JSON, nullable=True)  # full JSON: levels + tasks with sigs/checklists
+    document     = relationship("Document")
 
 
 class WorkflowInstance(Base):

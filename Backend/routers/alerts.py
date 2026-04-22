@@ -18,8 +18,21 @@ Recipients:
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as _date
 from typing import List
+
+_IST = timedelta(hours=5, minutes=30)
+
+def _now_ist() -> datetime:
+    """Current UTC moment expressed as a naive IST datetime."""
+    return datetime.utcnow() + _IST
+
+def _today_ist() -> _date:
+    return _now_ist().date()
+
+def _ist_day_utc_start(d: _date) -> datetime:
+    """Naive UTC datetime corresponding to IST midnight of the given IST date."""
+    return datetime(d.year, d.month, d.day) - _IST
 
 from database import get_db, SessionLocal
 from routers.auth import get_current_user
@@ -74,12 +87,13 @@ def _collect_recipients(doc: models.Document, db: Session) -> List[models.User]:
 
 
 def _already_alerted_today(doc_id: int, alert_type: str, db: Session) -> bool:
-    today = datetime.utcnow().date()
+    today_ist = _today_ist()
+    utc_start = _ist_day_utc_start(today_ist)
     exists = db.query(models.AlertLog).filter(
         models.AlertLog.document_id == doc_id,
         models.AlertLog.alert_type == alert_type,
         models.AlertLog.status == "Sent",
-        models.AlertLog.sent_at >= datetime(today.year, today.month, today.day),
+        models.AlertLog.sent_at >= utc_start,
     ).first()
     return exists is not None
 
@@ -131,7 +145,7 @@ def run_expiry_alert_job():
     """
     db = SessionLocal()
     try:
-        today = datetime.utcnow()
+        now_ist = _now_ist()
         docs = db.query(models.Document).filter(
             models.Document.expiry_date != None,
             models.Document.is_deleted == False,
@@ -140,12 +154,12 @@ def run_expiry_alert_job():
 
         for doc in docs:
             # Skip if document has been renewed
-            if doc.renewal_date and doc.renewal_date > today:
+            if doc.renewal_date and doc.renewal_date > now_ist:
                 continue
             if not doc.expiry_date:
                 continue
 
-            days_left = (doc.expiry_date.date() - today.date()).days
+            days_left = (doc.expiry_date.date() - now_ist.date()).days
             lead_days = _get_lead_days(doc, db)
             recipients = _collect_recipients(doc, db)
 
@@ -230,17 +244,18 @@ def upcoming_expirations(
     current_user: models.User = Depends(get_current_user),
 ):
     """Returns docs expiring within `days` days, with alert config thresholds."""
-    cutoff = datetime.utcnow() + timedelta(days=days)
+    now_ist = _now_ist()
+    cutoff = now_ist + timedelta(days=days)
     docs = db.query(models.Document).filter(
         models.Document.expiry_date != None,
         models.Document.expiry_date <= cutoff,
-        models.Document.expiry_date >= datetime.utcnow(),
+        models.Document.expiry_date >= now_ist,
         models.Document.is_deleted == False,
     ).order_by(models.Document.expiry_date).all()
 
     result = []
     for doc in docs:
-        days_left = (doc.expiry_date.date() - datetime.utcnow().date()).days
+        days_left = (doc.expiry_date.date() - now_ist.date()).days
         lead_days = _get_lead_days(doc, db)
         result.append({
             "id": doc.id, "doc_number": doc.doc_number,

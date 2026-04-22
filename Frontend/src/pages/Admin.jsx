@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { adminAPI, authAPI } from '../api'
 import { useNavigate } from 'react-router-dom'
+import { fmtDate, fmtDateTime } from '../utils/dates'
 
 // ─── palette ──────────────────────────────────────────────────────────────────
 const C = {
@@ -245,7 +246,7 @@ function UsersGrid({ toast }) {
                   {row.is_sso_user ? <span title="SSO User">🔑</span> : '—'}
                 </td>
                 <td style={{padding:'6px 10px',borderRight:`1px solid ${C.border}`,fontSize:11,color:C.gray,whiteSpace:'nowrap'}}>
-                  {row.last_login ? new Date(row.last_login).toLocaleDateString('en-IN') : '—'}
+                  {fmtDate(row.last_login)}
                 </td>
                 <td style={{padding:'6px 10px',whiteSpace:'nowrap'}}>
                   <div style={{display:'flex',gap:5}}>
@@ -1250,7 +1251,7 @@ function FlaggedDocumentsPanel({ toast }) {
                   <Chip label={d.status} color={C.amber} />
                 </td>
                 <td style={{ padding:'8px 12px', color:C.gray }}>
-                  {d.flagged_at ? new Date(d.flagged_at).toLocaleString('en-IN', { timeZone:'Asia/Kolkata' }) : '—'}
+                  {fmtDateTime(d.flagged_at)}
                 </td>
               </tr>
             ))}

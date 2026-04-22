@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -165,22 +165,176 @@ export function Table({ columns, rows, onRowClick }) {
   )
 }
 
+// ─── SearchableSelect ─────────────────────────────────────────────────────────
+// Shared keyboard-accessible dropdown used across all modals/pages.
+// options: string[] OR {value, label}[]
+export function SearchableSelect({ options = [], value, onChange, placeholder }) {
+  const [open, setOpen]               = useState(false)
+  const [search, setSearch]           = useState('')
+  const [dropRect, setDropRect]       = useState(null)
+  const [highlighted, setHighlighted] = useState(-1)
+  const ref        = useRef(null)
+  const triggerRef = useRef(null)
+  const listRef    = useRef(null)
+
+  const optVal   = o => (o && typeof o === 'object') ? o.value : o
+  const optLabel = o => (o && typeof o === 'object') ? o.label : o
+  const selectedLabel = (() => {
+    if (!value) return null
+    const m = options.find(o => optVal(o) === value)
+    return m ? optLabel(m) : value
+  })()
+
+  useEffect(() => {
+    const onDown  = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const onScroll = e => { if (ref.current && ref.current.contains(e.target)) return; setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('scroll', onScroll, true)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('scroll', onScroll, true) }
+  }, [])
+
+  const filtered = options.filter(o => !search.trim() || optLabel(o).toLowerCase().includes(search.toLowerCase()))
+  useEffect(() => { setHighlighted(-1) }, [search])
+  useEffect(() => {
+    if (highlighted >= 0 && listRef.current)
+      listRef.current.children[highlighted]?.scrollIntoView({ block: 'nearest' })
+  }, [highlighted])
+
+  const openDrop  = () => { if (ref.current) setDropRect(ref.current.getBoundingClientRect()); setOpen(true); setSearch(''); setHighlighted(-1) }
+  const closeDrop = () => { setOpen(false); setSearch(''); setHighlighted(-1) }
+  const selectOpt = opt => { onChange(optVal(opt)); closeDrop(); triggerRef.current?.focus() }
+  const handleBlur = e => { if (!ref.current?.contains(e.relatedTarget)) closeDrop() }
+
+  const handleTriggerKey = e => {
+    if (e.key === 'Enter' || e.key === ' ' || (e.key === 'ArrowDown' && e.altKey)) { e.preventDefault(); if (!open) openDrop() }
+    if (e.key === 'Escape') closeDrop()
+  }
+  const handleSearchKey = e => {
+    if (e.key === 'Escape' || (e.key === 'ArrowUp' && e.altKey)) { closeDrop(); triggerRef.current?.focus(); return }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlighted(h => Math.min(h + 1, filtered.length - 1)); return }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setHighlighted(h => h <= 0 ? -1 : h - 1); return }
+    if (e.key === 'Enter' || (e.key === ' ' && highlighted >= 0)) {
+      e.preventDefault()
+      if (highlighted >= 0 && filtered[highlighted]) selectOpt(filtered[highlighted])
+      else if (e.key === 'Enter' && filtered.length === 1) selectOpt(filtered[0])
+    }
+  }
+
+  const iS = { width:'100%', boxSizing:'border-box', fontSize:13, padding:'7px 10px', borderRadius:7, border:'1px solid #d1d5db' }
+
+  return (
+    <div ref={ref} style={{ position:'relative' }}>
+      <div ref={triggerRef} tabIndex={0}
+        onClick={() => open ? closeDrop() : openDrop()}
+        onKeyDown={handleTriggerKey} onBlur={handleBlur}
+        onFocus={e => e.currentTarget.style.borderColor = '#3b82f6'}
+        style={{ ...iS, cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center',
+          background:'#fff', userSelect:'none', outline:'none',
+          color: value ? '#111' : '#9ca3af', borderColor: open ? '#3b82f6' : '#d1d5db' }}>
+        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>
+          {selectedLabel || placeholder || '— Select —'}
+        </span>
+        <span style={{ marginLeft:8, fontSize:10, color:'#9ca3af', flexShrink:0 }}>{open ? '▲' : '▼'}</span>
+      </div>
+
+      {open && dropRect && (() => {
+        const MAX_H   = 280
+        const GAP     = 4
+        const vw      = window.innerWidth
+        const vh      = window.innerHeight
+        const below   = vh - dropRect.bottom - GAP
+        const above   = dropRect.top - GAP
+        const flipUp  = below < 160 && above > below
+        const maxH    = Math.max(80, Math.min(MAX_H, flipUp ? above : below) - GAP)
+        const top     = flipUp ? dropRect.top - GAP - maxH : dropRect.bottom + GAP
+        const rawLeft = dropRect.left
+        const left    = Math.max(8, Math.min(rawLeft, vw - dropRect.width - 8))
+        return (
+        <div style={{ position:'fixed', top, left, width: dropRect.width,
+          background:'#fff', border:'1px solid #d1d5db', borderRadius:8, zIndex:9999,
+          boxShadow:'0 8px 24px rgba(0,0,0,0.15)', display:'flex', flexDirection:'column', maxHeight: maxH }}>
+          <div style={{ padding:'6px 8px', borderBottom:'1px solid #f0f0f0', flexShrink:0 }}>
+            <input autoFocus value={search} onChange={e => setSearch(e.target.value)}
+              onKeyDown={handleSearchKey} onBlur={handleBlur}
+              placeholder="Type to search or ↑↓ to navigate…"
+              onClick={e => e.stopPropagation()}
+              style={{ width:'100%', boxSizing:'border-box', fontSize:12, padding:'5px 8px', borderRadius:6, border:'1px solid #e5e7eb' }} />
+          </div>
+          <div onClick={() => { onChange(''); closeDrop() }}
+            onMouseDown={e => e.preventDefault()}
+            style={{ padding:'7px 12px', fontSize:12, color:'#9ca3af', cursor:'pointer', borderBottom:'1px solid #f9fafb', flexShrink:0 }}
+            onMouseEnter={e => e.currentTarget.style.background='#f9fafb'}
+            onMouseLeave={e => e.currentTarget.style.background='#fff'}>
+            — Clear selection —
+          </div>
+          <div ref={listRef} style={{ overflowY:'auto', flex:1 }}>
+            {filtered.length === 0
+              ? <div style={{ padding:'10px 12px', fontSize:12, color:'#9ca3af', textAlign:'center' }}>No matches found</div>
+              : filtered.map((opt, idx) => {
+                  const v = optVal(opt), l = optLabel(opt)
+                  const isSel = value === v, isHl = idx === highlighted
+                  return (
+                    <div key={v} onClick={() => selectOpt(opt)}
+                      onMouseDown={e => e.preventDefault()}
+                      onMouseEnter={() => setHighlighted(idx)} onMouseLeave={() => setHighlighted(-1)}
+                      style={{ padding:'8px 12px', fontSize:12, cursor:'pointer', borderBottom:'1px solid #f9fafb',
+                        background: isHl ? '#dbeafe' : isSel ? '#E6F1FB' : '#fff',
+                        color: isSel ? '#0C447C' : '#111', fontWeight: isSel ? 600 : 400 }}>
+                      {l}
+                    </div>
+                  )
+                })
+            }
+          </div>
+          <div style={{ padding:'4px 8px', borderTop:'1px solid #f0f0f0', fontSize:10, color:'#9ca3af', textAlign:'right', flexShrink:0 }}>
+            {filtered.length} of {options.length} options
+          </div>
+        </div>
+        )
+      })()}
+    </div>
+  )
+}
+
 // ─── Modal ────────────────────────────────────────────────────────────────────
 export function Modal({ title, onClose, children, width = 560 }) {
+  const innerRef = useRef(null)
+
+  useEffect(() => {
+    // Auto-focus first form field (skips the × close button)
+    const firstField = innerRef.current?.querySelector(
+      'input:not([type="hidden"]), select, textarea, [tabindex="0"]'
+    )
+    const t = setTimeout(() => firstField?.focus(), 30)
+
+    // Escape closes modal
+    const onEsc = e => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onEsc)
+    return () => { clearTimeout(t); document.removeEventListener('keydown', onEsc) }
+  }, [])
+
+  // Focus trap — Tab/Shift+Tab stay inside modal
+  const handleKeyDown = e => {
+    if (e.key !== 'Tab') return
+    const sel = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const nodes = [...(innerRef.current?.querySelectorAll(sel) || [])]
+    if (!nodes.length) return
+    const first = nodes[0], last = nodes[nodes.length - 1]
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+  }
+
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 1000,
-      background: 'rgba(0,0,0,0.45)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }} onClick={onClose}>
-      <div style={{
-        background: '#fff', borderRadius: 14, width, maxWidth: '95vw',
-        maxHeight: '90vh', overflowY: 'auto', padding: '1.5rem',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-      }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{title}</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>×</button>
+    <div style={{ position:'fixed', inset:0, zIndex:1000, background:'rgba(0,0,0,0.45)',
+      display:'flex', alignItems:'center', justifyContent:'center' }} onClick={onClose}>
+      <div ref={innerRef} onKeyDown={handleKeyDown}
+        style={{ background:'#fff', borderRadius:14, width, maxWidth:'95vw',
+          maxHeight:'90vh', overflowY:'auto', padding:'1.5rem',
+          boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+          <h3 style={{ margin:0, fontSize:16, fontWeight:600 }}>{title}</h3>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'#6b7280' }}>×</button>
         </div>
         {children}
       </div>

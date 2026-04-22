@@ -4,10 +4,65 @@ import FileViewer from '../components/FileViewer'
 import { useParams, useNavigate } from 'react-router-dom'
 import { documentsAPI, workflowAPI, adminAPI } from '../api'
 import { useAuth } from '../hooks/useAuth'
+import { fmtDate, fmtDateTime } from '../utils/dates'
 import {
   Badge, Btn, Card, Spinner, Tabs, WorkflowBar,
   SectionHead, Empty, Input, Textarea, Select, Modal
 } from '../components/ui'
+
+function MetaField({ field, val, setVal, locked }) {
+  const baseInp = {
+    width: '100%', boxSizing: 'border-box', fontSize: 13,
+    padding: '6px 10px', borderRadius: 6,
+    border: '1px solid #d1d5db',
+    background: locked ? '#f3f4f6' : '#fff',
+    color: locked ? '#9ca3af' : '#111',
+  }
+  if (locked) return (
+    <div>
+      <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 3, display: 'flex', justifyContent: 'space-between' }}>
+        <span>{field.label}</span>
+        <span style={{ fontSize: 10, background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 4, padding: '1px 6px', color: '#9ca3af' }}>Restricted</span>
+      </div>
+      <input value={val} disabled style={baseInp} />
+    </div>
+  )
+  if (field.type === 'dropdown') {
+    const opts = field.options || []
+    return (
+      <div>
+        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
+        <select value={val} onChange={e => setVal(e.target.value)} style={{ ...baseInp, cursor: 'pointer' }}>
+          <option value="">— Select —</option>
+          {opts.map(o => {
+            const v = typeof o === 'object' ? o.value : o
+            const l = typeof o === 'object' ? o.label : o
+            return <option key={v} value={v}>{l}</option>
+          })}
+        </select>
+      </div>
+    )
+  }
+  if (field.type === 'date') return (
+    <div>
+      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
+      <input type="date" value={val} onChange={e => setVal(e.target.value)} style={baseInp} />
+    </div>
+  )
+  if (field.type === 'textarea') return (
+    <div>
+      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
+      <textarea value={val} onChange={e => setVal(e.target.value)} rows={3}
+        style={{ ...baseInp, resize: 'vertical', fontFamily: 'inherit' }} />
+    </div>
+  )
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
+      <input value={val} onChange={e => setVal(e.target.value)} style={baseInp} />
+    </div>
+  )
+}
 
 export default function DocumentDetail() {
   const { id } = useParams()
@@ -50,6 +105,9 @@ export default function DocumentDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
+  const [fileAccessStats, setFileAccessStats] = useState(null)
+  const [showWfHistory, setShowWfHistory] = useState(false)
+
   // Metadata edit mode
   const [metaEditMode, setMetaEditMode]   = useState(false)
   const [editForm, setEditForm]           = useState({})
@@ -73,6 +131,12 @@ export default function DocumentDetail() {
       setLockedFields(raw.split(',').map(s => s.trim()).filter(Boolean))
     })
   }, [id])
+
+  useEffect(() => {
+    if (tab === 'files') {
+      documentsAPI.fileAccessStats(id).then(r => setFileAccessStats(r.data)).catch(() => {})
+    }
+  }, [tab, id])
 
   async function handleCheckout(action) {
     await documentsAPI.checkout(id, action)
@@ -215,6 +279,7 @@ export default function DocumentDetail() {
     a.download = filename
     a.click()
     URL.revokeObjectURL(url)
+    documentsAPI.fileAccessStats(id).then(r => setFileAccessStats(r.data)).catch(() => {})
   }
 
   async function handleDownloadTemplate(levelId, filename) {
@@ -281,10 +346,8 @@ export default function DocumentDetail() {
     try {
       for (const file of uploadFiles) {
         const vfd = new FormData()
-        vfd.append('file',          file)
-        vfd.append('change_reason', 'File uploaded during preparation')
-        vfd.append('is_major',      false)
-        await documentsAPI.uploadVersion(id, vfd)
+        vfd.append('file', file)
+        await documentsAPI.addFile(id, vfd)
 
         // Auto-update Number of Sheets for Drawing doc type
         if (doc.doc_type?.code === 'DRW' && file.name.toLowerCase().endsWith('.pdf')) {
@@ -405,6 +468,19 @@ export default function DocumentDetail() {
           {doc.confidential && <Badge label="Confidential" />}
           {doc.checked_out && <Badge label="Checked Out" />}
           <Badge label={doc.status} />
+          {doc.workflow_history?.length > 0 && (
+            <button
+              onClick={() => setShowWfHistory(true)}
+              title="View previous workflow cycles — approvals, rejections, digital signatures and checklists"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                border: '1px solid #185FA5', background: '#E6F1FB',
+                color: '#0C447C', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+              }}>
+              📋 Workflow History ({doc.workflow_history.length})
+            </button>
+          )}
         </div>
       </div>
 
@@ -604,65 +680,6 @@ export default function DocumentDetail() {
         const schema = Array.isArray(doc.doc_type?.metadata_schema) ? doc.doc_type.metadata_schema : []
         const inPrep = doc.status === 'Draft' || doc.status === 'Created'
 
-        // ── helper: render one custom field as an input ──────────────────────
-        function MetaInput({ field }) {
-          const locked  = lockedFields.includes(field.key) || !!field.restricted
-          const val     = editForm.custom_metadata?.[field.key] ?? ''
-          const setVal  = v => setEditForm(f => ({ ...f, custom_metadata: { ...f.custom_metadata, [field.key]: v } }))
-          const baseInp = {
-            width: '100%', boxSizing: 'border-box', fontSize: 13,
-            padding: '6px 10px', borderRadius: 6,
-            border: '1px solid #d1d5db',
-            background: locked ? '#f3f4f6' : '#fff',
-            color: locked ? '#9ca3af' : '#111',
-          }
-          if (locked) return (
-            <div>
-              <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 3, display: 'flex', justifyContent: 'space-between' }}>
-                <span>{field.label}</span>
-                <span style={{ fontSize: 10, background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 4, padding: '1px 6px', color: '#9ca3af' }}>Restricted</span>
-              </div>
-              <input value={val} disabled style={baseInp} />
-            </div>
-          )
-          if (field.type === 'dropdown') {
-            const opts = field.options || []
-            return (
-              <div>
-                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
-                <select value={val} onChange={e => setVal(e.target.value)} style={{ ...baseInp, cursor: 'pointer' }}>
-                  <option value="">— Select —</option>
-                  {opts.map(o => {
-                    const v = typeof o === 'object' ? o.value : o
-                    const l = typeof o === 'object' ? o.label : o
-                    return <option key={v} value={v}>{l}</option>
-                  })}
-                </select>
-              </div>
-            )
-          }
-          if (field.type === 'date') return (
-            <div>
-              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
-              <input type="date" value={val} onChange={e => setVal(e.target.value)} style={baseInp} />
-            </div>
-          )
-          if (field.type === 'textarea') return (
-            <div>
-              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
-              <textarea value={val} onChange={e => setVal(e.target.value)} rows={3}
-                style={{ ...baseInp, resize: 'vertical', fontFamily: 'inherit' }} />
-            </div>
-          )
-          // text / user / default
-          return (
-            <div>
-              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
-              <input value={val} onChange={e => setVal(e.target.value)} style={baseInp} />
-            </div>
-          )
-        }
-
         const cellCM = { background: '#f0f7ff', borderRadius: 8, padding: '10px 14px', border: '1px solid #bfdbfe' }
         const lblCM  = { fontSize: 11, color: '#185FA5', marginBottom: 2 }
 
@@ -723,7 +740,7 @@ export default function DocumentDetail() {
                         })()
                       : null
                     const display = fieldDef?.type === 'date' && raw
-                      ? (() => { try { return new Date(raw).toLocaleDateString('en-IN') } catch { return raw } })()
+                      ? fmtDate(raw)
                       : raw != null ? String(raw) : '—'
                     return (
                       <div style={cellCM}>
@@ -767,11 +784,16 @@ export default function DocumentDetail() {
                   )
                   return (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-                      {effectiveFields.map(field => (
-                        <div key={field.key} style={{ gridColumn: field.type === 'textarea' ? '1/-1' : undefined }}>
-                          <MetaInput field={field} />
-                        </div>
-                      ))}
+                      {effectiveFields.map(field => {
+                        const locked = lockedFields.includes(field.key) || !!field.restricted
+                        const val = editForm.custom_metadata?.[field.key] ?? ''
+                        const setVal = v => setEditForm(f => ({ ...f, custom_metadata: { ...f.custom_metadata, [field.key]: v } }))
+                        return (
+                          <div key={field.key} style={{ gridColumn: field.type === 'textarea' ? '1/-1' : undefined }}>
+                            <MetaField field={field} val={val} setVal={setVal} locked={locked} />
+                          </div>
+                        )
+                      })}
                     </div>
                   )
                 })()}
@@ -869,49 +891,85 @@ export default function DocumentDetail() {
             </div>
           )}
 
-          {doc.files?.length === 0 ? <Empty message="No files attached." /> : doc.files?.map(f => (
+          {doc.files?.length === 0 ? <Empty message="No files attached." /> : doc.files?.map(f => {
+            // eslint-disable-next-line eqeqeq
+            const fStats = fileAccessStats?.by_file?.find(s => s.file_id == f.id)
+            return (
             <div key={f.id} style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              padding: '12px 16px', background: '#fff', border: '1px solid #e5e7eb',
-              borderRadius: 8, marginBottom: 8,
+              background: '#fff', border: '1px solid #e5e7eb',
+              borderRadius: 8, marginBottom: 8, overflow: 'hidden',
             }}>
-              <div style={{
-                width: 40, height: 40, background: '#E6F1FB', borderRadius: 8,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 11, fontWeight: 700, color: '#185FA5',
-              }}>{f.file_format || 'FILE'}</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{f.filename}</div>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>
-                  {f.file_format} · {f.file_size ? `${(f.file_size / 1024).toFixed(0)} KB` : '—'} · Uploaded {new Date(f.uploaded_at).toLocaleDateString('en-IN')}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px' }}>
+                <div style={{
+                  width: 40, height: 40, background: '#E6F1FB', borderRadius: 8,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, fontWeight: 700, color: '#185FA5',
+                }}>{f.file_format || 'FILE'}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{f.filename}</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
+                    <span>{f.file_format} · {f.file_size ? `${(f.file_size / 1024).toFixed(0)} KB` : '—'} · Uploaded {fmtDate(f.uploaded_at)}</span>
+                    <span style={{ color: '#185FA5' }}>
+                      👁 {fStats?.view_count ?? 0} view{(fStats?.view_count ?? 0) !== 1 ? 's' : ''} · ⬇ {fStats?.download_count ?? 0} download{(fStats?.download_count ?? 0) !== 1 ? 's' : ''}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <button
-                onClick={() => setViewingFile(f)}
-                title="Preview this file directly in the browser without downloading it."
-                style={{ padding: '5px 12px', borderRadius: 7,
-                  border: '1px solid #185FA5', background: '#E6F1FB',
-                  color: '#0C447C', cursor: 'pointer', fontSize: 12,
-                  fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                👁 View
-              </button>
-              <Btn label="Download" size="sm" icon="⬇" onClick={() => handleDownload(f.id, f.filename)}
-                title="Download this file to your computer." />
-              {canUploadFile && (
                 <button
-                  onClick={() => handleDeleteFile(f.id, f.filename)}
-                  title="Permanently remove this file from the document. This action cannot be undone."
-                  style={{
-                    padding: '5px 10px', borderRadius: 7,
-                    border: '1px solid #fca5a5', background: '#fff',
-                    color: '#A32D2D', cursor: 'pointer', fontSize: 12,
-                    fontWeight: 600, fontFamily: 'inherit',
-                  }}>
-                  🗑 Delete
+                  onClick={() => setViewingFile(f)}
+                  title="Preview this file directly in the browser without downloading it."
+                  style={{ padding: '5px 12px', borderRadius: 7,
+                    border: '1px solid #185FA5', background: '#E6F1FB',
+                    color: '#0C447C', cursor: 'pointer', fontSize: 12,
+                    fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                  👁 View
                 </button>
+                <Btn label="Download" size="sm" icon="⬇" onClick={() => handleDownload(f.id, f.filename)}
+                  title="Download this file to your computer." />
+                {canUploadFile && (
+                  <button
+                    onClick={() => handleDeleteFile(f.id, f.filename)}
+                    title="Permanently remove this file from the document. This action cannot be undone."
+                    style={{
+                      padding: '5px 10px', borderRadius: 7,
+                      border: '1px solid #fca5a5', background: '#fff',
+                      color: '#A32D2D', cursor: 'pointer', fontSize: 12,
+                      fontWeight: 600, fontFamily: 'inherit',
+                    }}>
+                    🗑 Delete
+                  </button>
+                )}
+              </div>
+              {fStats && (fStats.view_count > 0 || fStats.download_count > 0) && (
+                <div style={{ borderTop: '1px solid #f3f4f6', padding: '8px 16px', background: '#fafbfc', display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                  {fStats.viewers.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Viewed by</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {fStats.viewers.map(v => (
+                          <span key={v.id} style={{ fontSize: 11, background: '#E6F1FB', color: '#0C447C', borderRadius: 99, padding: '2px 8px' }}>
+                            {v.name} ×{v.count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {fStats.downloaders.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Downloaded by</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {fStats.downloaders.map(v => (
+                          <span key={v.id} style={{ fontSize: 11, background: '#E1F5EE', color: '#0F6E56', borderRadius: 99, padding: '2px 8px' }}>
+                            {v.name} ×{v.count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -939,7 +997,7 @@ export default function DocumentDetail() {
                 </div>
                 <div style={{ fontSize: 13, color: '#374151', marginTop: 2 }}>{v.change_reason}</div>
                 <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                  By {v.created_by?.name || 'Unknown'} · {new Date(v.created_at).toLocaleString('en-IN')}
+                  By {v.created_by?.name || 'Unknown'} · {fmtDateTime(v.created_at)}
                 </div>
               </div>
               <div style={{ flexShrink: 0 }}>
@@ -960,7 +1018,7 @@ export default function DocumentDetail() {
                 {[
                   ['Stage', wf.stage],
                   ['Status', wf.completed ? 'Completed' : 'Active'],
-                  ['Started', new Date(wf.started_at).toLocaleDateString('en-IN')],
+                  ['Started', fmtDate(wf.started_at)],
                 ].map(([k, v]) => (
                   <div key={k} style={{ background: '#f9fafb', borderRadius: 8, padding: '12px 16px' }}>
                     <div style={{ fontSize: 11, color: '#6b7280' }}>{k}</div>
@@ -1022,7 +1080,7 @@ export default function DocumentDetail() {
                                   <span style={{ fontWeight: 500, fontSize: 13 }}>{t.assignee?.name || 'Unknown'}</span>
                                   {t.completed_at && (
                                     <span style={{ fontSize: 11, color: '#9ca3af', marginLeft: 8 }}>
-                                      {new Date(t.completed_at).toLocaleString('en-IN')}
+                                      {fmtDateTime(t.completed_at)}
                                     </span>
                                   )}
                                 </div>
@@ -1188,16 +1246,171 @@ export default function DocumentDetail() {
                   <div style={{ paddingBottom: 4 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{e.action}</div>
                     <div style={{ fontSize: 12, color: '#6b7280' }}>by {e.user?.name || 'System'}</div>
-                    <div style={{ fontSize: 11, color: '#9ca3af' }}>{new Date(e.timestamp).toLocaleString('en-IN')}</div>
+                    <div style={{ fontSize: 11, color: '#9ca3af' }}>{fmtDateTime(e.timestamp)}</div>
                     {e.note && <div style={{ fontSize: 12, color: '#374151', marginTop: 2, background: '#f9fafb', padding: '4px 8px', borderRadius: 4 }}>{e.note}</div>}
-                    {e.old_value && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                      Changed: {JSON.stringify(e.old_value)} → {JSON.stringify(e.new_value)}
-                    </div>}
+                    {e.old_value && Object.keys(e.old_value).length > 0 && (
+                      <div style={{ fontSize: 11, marginTop: 4, background: '#f9fafb', padding: '5px 8px', borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {Object.entries(e.old_value).map(([k, oldVal]) => (
+                          <div key={k}>
+                            <span style={{ color: '#6b7280', fontWeight: 600 }}>{k}:</span>
+                            {' '}
+                            <span style={{ color: '#A32D2D' }}>{oldVal ?? '—'}</span>
+                            {' → '}
+                            <span style={{ color: '#0F6E56' }}>{e.new_value?.[k] ?? '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Workflow History Modal ────────────────────────────────────────────── */}
+      {showWfHistory && (
+        <div
+          onClick={() => setShowWfHistory(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 3000,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex', flexDirection: 'column',
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              margin: '32px auto', width: '90%', maxWidth: 900,
+              background: '#fff', borderRadius: 12, overflow: 'hidden',
+              display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 64px)',
+            }}>
+            {/* Modal header */}
+            <div style={{
+              background: '#0C447C', color: '#fff',
+              padding: '14px 20px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
+            }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>Workflow History — {doc.doc_number}</div>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)', marginTop: 2 }}>
+                  {doc.workflow_history.length} completed cycle{doc.workflow_history.length !== 1 ? 's' : ''}
+                </div>
+              </div>
+              <button onClick={() => setShowWfHistory(false)}
+                style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff',
+                  fontSize: 20, cursor: 'pointer', width: 34, height: 34, borderRadius: '50%',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+            </div>
+            {/* Scrollable body */}
+            <div style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
+              {[...doc.workflow_history].reverse().map((snap, si) => (
+                <div key={snap.id} style={{
+                  border: `1px solid ${snap.outcome === 'rejected' ? '#fca5a5' : '#86efac'}`,
+                  borderRadius: 10, marginBottom: 20, overflow: 'hidden',
+                }}>
+                  {/* Cycle header */}
+                  <div style={{
+                    background: snap.outcome === 'rejected' ? '#FCEBEB' : '#E1F5EE',
+                    padding: '10px 16px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{
+                        fontWeight: 700, fontSize: 13,
+                        color: snap.outcome === 'rejected' ? '#A32D2D' : '#0F6E56',
+                      }}>
+                        {snap.outcome === 'rejected' ? '✕ Rejected' : '✓ Released'} — Cycle #{doc.workflow_history.length - si}
+                      </span>
+                      {snap.rejected_at_stage && (
+                        <span style={{ fontSize: 11, background: '#fca5a5', color: '#7f1d1d',
+                          borderRadius: 99, padding: '1px 8px' }}>
+                          at {snap.rejected_at_stage}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#6b7280', textAlign: 'right' }}>
+                      <div>{snap.mode || 'Auto Populate'}</div>
+                      <div>Started: {fmtDate(snap.initiated_at)} · Ended: {fmtDate(snap.snapshot_at)}</div>
+                    </div>
+                  </div>
+
+                  {snap.rejection_note && (
+                    <div style={{ padding: '8px 16px', background: '#fff7f7', fontSize: 12,
+                      borderBottom: '1px solid #fca5a5', color: '#7f1d1d' }}>
+                      Rejection reason: {snap.rejection_note}
+                    </div>
+                  )}
+
+                  <div style={{ padding: '12px 16px', background: '#fff' }}>
+                    {(snap.snapshot?.levels || []).map(lv => (
+                      <div key={lv.step} style={{ marginBottom: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                          <div style={{
+                            background: lv.status === 'Done' ? '#E1F5EE' : lv.status === 'In Progress' ? '#E6F1FB' : '#f3f4f6',
+                            color: lv.status === 'Done' ? '#0F6E56' : lv.status === 'In Progress' ? '#185FA5' : '#6b7280',
+                            borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700,
+                          }}>Step {lv.step}</div>
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>{lv.name}</span>
+                          <span style={{ fontSize: 11, color: '#9ca3af' }}>({lv.stage})</span>
+                          {lv.status === 'Done' && <span style={{ fontSize: 11, color: '#0F6E56' }}>✓ Completed</span>}
+                        </div>
+                        {(lv.tasks || []).map((t, ti) => (
+                          <div key={ti} style={{
+                            marginLeft: 16, marginBottom: 6, padding: '8px 12px',
+                            background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb',
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{
+                                  width: 28, height: 28, borderRadius: '50%', background: '#E6F1FB',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: 11, fontWeight: 700, color: '#185FA5', flexShrink: 0,
+                                }}>
+                                  {(t.assignee_name || '?').split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}
+                                </div>
+                                <span style={{ fontWeight: 600, fontSize: 12 }}>{t.assignee_name || 'Unknown'}</span>
+                                <span style={{
+                                  fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 99,
+                                  background: t.status === 'Approved' ? '#E1F5EE' : t.status === 'Pending' ? '#FAEEDA' : '#FCEBEB',
+                                  color: t.status === 'Approved' ? '#0F6E56' : t.status === 'Pending' ? '#854F0B' : '#A32D2D',
+                                }}>{t.status}</span>
+                              </div>
+                              {t.completed_at && (
+                                <span style={{ fontSize: 10, color: '#9ca3af' }}>{fmtDateTime(t.completed_at)}</span>
+                              )}
+                            </div>
+                            {t.action_note && (
+                              <div style={{ fontSize: 11, color: '#374151', marginTop: 6,
+                                paddingLeft: 36 }}>💬 {t.action_note}</div>
+                            )}
+                            {t.digital_sig_log && (
+                              <div style={{ fontSize: 10, color: '#6b7280', marginTop: 6, paddingLeft: 36,
+                                background: '#fff', border: '1px solid #e5e7eb', borderRadius: 4,
+                                padding: '4px 8px', marginLeft: 36 }}>
+                                ✍ Signed by {t.digital_sig_log.user} — {t.digital_sig_log.action}
+                                {t.digital_sig_log.ip ? ` · IP: ${t.digital_sig_log.ip}` : ''}
+                              </div>
+                            )}
+                            {t.checklist_file_name && (
+                              <div style={{ fontSize: 11, color: '#185FA5', marginTop: 6, paddingLeft: 36 }}>
+                                📎 {t.checklist_file_name}
+                                {t.checklist_file_path && (
+                                  <a href={`/api/workflow/${doc.id}/history-checklist/download?path=${encodeURIComponent(t.checklist_file_path)}&token=${encodeURIComponent(localStorage.getItem('dms_token') || '')}`}
+                                    download={t.checklist_file_name}
+                                    style={{ marginLeft: 8, fontSize: 11, color: '#0C447C', fontWeight: 600 }}>⬇ Download</a>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -1222,7 +1435,7 @@ export default function DocumentDetail() {
                       {fb.user?.name || 'User'}
                     </div>
                     <div style={{ fontSize: 11, color: '#9ca3af' }}>
-                      {new Date(fb.created_at).toLocaleString('en-IN')}
+                      {fmtDateTime(fb.created_at)}
                     </div>
                   </div>
                 </div>
@@ -1562,7 +1775,10 @@ export default function DocumentDetail() {
         <FileViewer
           file={viewingFile}
           docId={id}
-          onClose={() => setViewingFile(null)}
+          onClose={() => {
+            setViewingFile(null)
+            documentsAPI.fileAccessStats(id).then(r => setFileAccessStats(r.data)).catch(() => {})
+          }}
         />
       )}
     </div>

@@ -13,7 +13,7 @@ LibreOffice (optional, best quality for DWG/STEP):
   Any format → soffice --headless --convert-to pdf
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 import os, shutil, traceback
@@ -377,6 +377,7 @@ def convert_to_pdf(file_id: int, src: str, filename: str) -> str:
 @router.get("/files/{file_id}/pdf")
 def get_as_pdf(
     file_id: int,
+    request: Request,
     token: str = None,
     db: Session = Depends(get_db),
 ):
@@ -397,11 +398,17 @@ def get_as_pdf(
     except Exception:
         raise HTTPException(500, f"Unexpected error:\n{traceback.format_exc()}")
 
-    db.add(models.AuditLog(
-        document_id=None, user_id=user.id,
-        action="File Viewed as PDF", note=f.filename,
-    ))
-    db.commit()
+    # Only log on the initial full request — skip PDF range/seeking requests
+    if not request.headers.get("range"):
+        db.add(models.AuditLog(
+            document_id=f.document_id, user_id=user.id,
+            action="File Viewed as PDF", note=f.filename,
+        ))
+        db.add(models.FileAccessLog(
+            document_id=f.document_id, file_id=f.id,
+            user_id=user.id, action="view",
+        ))
+        db.commit()
 
     fname = os.path.splitext(f.filename or "file")[0] + ".pdf"
     return FileResponse(

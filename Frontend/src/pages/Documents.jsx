@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { documentsAPI, adminAPI } from '../api'
 import { Badge, Btn, Card, Table, Spinner, Input, Select, Metric } from '../components/ui'
 import UploadModal from '../components/UploadModal'
+import { fmtDate } from '../utils/dates'
 
 export default function Documents() {
   const nav = useNavigate()
@@ -13,7 +14,7 @@ export default function Documents() {
   const [showUpload, setShowUpload] = useState(searchParams.get('upload') === '1')
 
   const [filters, setFilters] = useState({
-    q: '', doc_type_id: '', status: '', project: '', confidential: '',
+    q: '', doc_type_id: '', status: '', confidential: '',
   })
 
   const STATUSES = ['Draft', 'Under Review', 'Approved', 'Rejected', 'Archived', 'Expired']
@@ -24,7 +25,6 @@ export default function Documents() {
     if (filters.q)           params.q = filters.q
     if (filters.doc_type_id) params.doc_type_id = filters.doc_type_id
     if (filters.status)      params.status = filters.status
-    if (filters.project)     params.project = filters.project
     if (filters.confidential !== '') params.confidential = filters.confidential === 'true'
     documentsAPI.list(params)
       .then(r => setDocs(r.data))
@@ -70,7 +70,6 @@ export default function Documents() {
         </div>
       )
     },
-    { key: 'project', label: 'Project', render: v => <span style={{ fontSize: 12 }}>{v || '—'}</span> },
     { key: 'usi_kks_code', label: 'USI/KKS', render: v => <span style={{ fontSize: 12 }}>{v || '—'}</span> },
     { key: 'current_version', label: 'Ver', render: v => <span style={{ fontSize: 12 }}>v{v}</span> },
     {
@@ -91,11 +90,10 @@ export default function Documents() {
       key: 'expiry_date', label: 'Expiry',
       render: v => {
         if (!v) return '—'
-        const d = new Date(v)
-        const diff = (d - new Date()) / (1000 * 60 * 60 * 24)
+        const diff = (new Date(v) - new Date()) / (1000 * 60 * 60 * 24)
         return (
           <span style={{ fontSize: 12, color: diff < 90 ? '#A32D2D' : '#374151', fontWeight: diff < 90 ? 600 : 400 }}>
-            {d.toLocaleDateString('en-IN')}
+            {fmtDate(v)}
             {diff < 90 && ` ⚠`}
           </span>
         )
@@ -103,7 +101,7 @@ export default function Documents() {
     },
     {
       key: 'created_at', label: 'Created',
-      render: v => <span style={{ fontSize: 12 }}>{new Date(v).toLocaleDateString('en-IN')}</span>
+      render: v => <span style={{ fontSize: 12 }}>{fmtDate(v)}</span>
     },
   ]
 
@@ -127,9 +125,9 @@ export default function Documents() {
 
       {/* Filters */}
       <Card style={{ marginBottom: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 12, alignItems: 'end' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 12, alignItems: 'end' }}>
           <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Search (title, doc number, USI, project)</label>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Search (title, doc number, USI)</label>
             <input value={filters.q} onChange={e => setF('q', e.target.value)}
               placeholder="Type to search…" style={{ width: '100%', boxSizing: 'border-box' }} />
           </div>
@@ -148,11 +146,6 @@ export default function Documents() {
             </select>
           </div>
           <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Project</label>
-            <input value={filters.project} onChange={e => setF('project', e.target.value)}
-              placeholder="Filter by project" style={{ width: '100%', boxSizing: 'border-box' }} />
-          </div>
-          <div>
             <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Confidential</label>
             <select value={filters.confidential} onChange={e => setF('confidential', e.target.value)} style={{ width: '100%' }}>
               <option value="">All</option>
@@ -163,7 +156,7 @@ export default function Documents() {
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
           <Btn label="Clear Filters" size="sm"
-            onClick={() => setFilters({ q: '', doc_type_id: '', status: '', project: '', confidential: '' })} />
+            onClick={() => setFilters({ q: '', doc_type_id: '', status: '', confidential: '' })} />
         </div>
       </Card>
 

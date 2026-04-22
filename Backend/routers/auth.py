@@ -3,14 +3,15 @@ auth.py — JWT login, SAP SSO (SAML 2.0), auth-code gate.
 
 Uses bcrypt directly (no passlib) — fully compatible with Python 3.14.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
-import os, base64, hashlib, traceback, bcrypt, json as _json
+import os, base64, hashlib, traceback, bcrypt, json as _json, pathlib, io, time
+from PIL import Image, ImageOps
 
 from database import get_db
 import models, schemas
@@ -158,11 +159,11 @@ def login(
     if not _verify_gate_token(effective_gate, db):
         raise HTTPException(status_code=403, detail="Access code required")
 
-    user = db.query(models.User).filter(models.User.email == form_data.username).first()
+    user = db.query(models.User).filter(models.User.employee_id == form_data.username).first()
     if not user or not user.hashed_password:
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+        raise HTTPException(status_code=400, detail="Incorrect employee ID or password")
     if not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+        raise HTTPException(status_code=400, detail="Incorrect employee ID or password")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account deactivated")
 
@@ -197,6 +198,71 @@ def register(data: schemas.UserCreate, db: Session = Depends(get_db)):
 @router.get("/me", response_model=schemas.UserOut)
 def me(current_user: models.User = Depends(get_current_user)):
     return current_user
+
+
+# ─── Profile picture upload ───────────────────────────────────────────────────
+
+_BASE_DIR           = pathlib.Path(__file__).resolve().parent.parent  # Backend/
+_PROFILE_UPLOAD_DIR = _BASE_DIR / "uploads" / "profiles"
+_ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+_AVATAR_PX          = 256  # square crop size
+
+@router.post("/profile/picture")
+def upload_profile_picture(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if pathlib.Path(file.filename or "").suffix.lower() not in _ALLOWED_IMAGE_EXTS:
+        raise HTTPException(status_code=400, detail="Only JPG and PNG files are allowed")
+
+    # Resize to square avatar and compress — 3 MB photo → ~20 KB
+    try:
+        img = Image.open(io.BytesIO(file.file.read())).convert("RGB")
+        img = ImageOps.fit(img, (_AVATAR_PX, _AVATAR_PX), Image.LANCZOS)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
+
+    # Fixed filename overwrites old file — no orphaned files accumulate
+    try:
+        _PROFILE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        dest = _PROFILE_UPLOAD_DIR / f"user_{current_user.id}.jpg"
+        img.save(str(dest), "JPEG", quality=85, optimize=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not save file: {exc}")
+
+    # ?t= timestamp busts browser cache on each new upload
+    url = f"/uploads/profiles/user_{current_user.id}.jpg?t={int(time.time())}"
+    try:
+        db.query(models.User).filter(models.User.id == current_user.id).update(
+            {"profile_picture": url}
+        )
+        db.commit()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update profile: {exc}")
+
+    return {"url": url}
+
+
+@router.delete("/profile/picture")
+def remove_profile_picture(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    dest = _PROFILE_UPLOAD_DIR / f"user_{current_user.id}.jpg"
+    try:
+        if dest.exists():
+            dest.unlink()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not delete file: {exc}")
+    try:
+        db.query(models.User).filter(models.User.id == current_user.id).update(
+            {"profile_picture": None}
+        )
+        db.commit()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update profile: {exc}")
+    return {"url": None}
 
 
 # ─── SAP SSO (SAML 2.0) ───────────────────────────────────────────────────────

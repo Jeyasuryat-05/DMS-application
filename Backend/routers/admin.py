@@ -9,6 +9,8 @@ import csv
 import io
 from datetime import datetime, date, timedelta
 
+def _iso(dt): return dt.isoformat() + 'Z' if dt else None
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
@@ -594,7 +596,7 @@ def list_flagged_documents(
             "doc_number": d.doc_number,
             "title": d.title,
             "status": d.status,
-            "flagged_at": d.flagged_at.isoformat() if d.flagged_at else None,
+            "flagged_at": _iso(d.flagged_at),
             "flagged_by_id": d.flagged_by_id,
         }
         for d in docs

@@ -38,6 +38,7 @@ class UserOut(BaseModel):
     is_active: bool = True
     is_sso_user: bool = False
     last_login: Optional[Any] = None
+    profile_picture: Optional[str] = None
     model_config = {"from_attributes": True}
 
 class UserCreate(BaseModel):

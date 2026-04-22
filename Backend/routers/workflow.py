@@ -30,6 +30,8 @@ from typing import List, Optional
 from datetime import datetime
 import json
 
+def _iso(dt): return dt.isoformat() + 'Z' if dt else None
+
 from database import get_db
 from routers.auth import get_current_user
 import models, schemas
@@ -72,6 +74,48 @@ def _notify(users_emails: list, subject: str, body: str):
     pass   # TODO: integrate email service
 
 
+def _save_wf_snapshot(db, doc, wf, outcome: str, rejection_note: str = ""):
+    """Snapshot the entire workflow (levels + tasks with sigs/checklists) before it is deleted/closed."""
+    try:
+        levels_data = []
+        for lv in (wf.levels or []):
+            tasks_data = []
+            for t in (lv.tasks or []):
+                tasks_data.append({
+                    "step": t.step,
+                    "assignee_id": t.assignee_id,
+                    "assignee_name": t.assignee.name if t.assignee else None,
+                    "status": t.status,
+                    "action_note": t.action_note,
+                    "digital_sig_log": t.digital_sig_log,
+                    "checklist_done": t.checklist_done,
+                    "checklist_file_name": t.checklist_file_name,
+                    "checklist_file_path": t.checklist_file_path,
+                    "completed_at": _iso(t.completed_at),
+                })
+            levels_data.append({
+                "step": lv.step,
+                "name": lv.name,
+                "stage": lv.stage,
+                "status": lv.status,
+                "checklist_required": lv.checklist_required,
+                "checklist_template_name": lv.checklist_template_name if hasattr(lv, 'checklist_template_name') else None,
+                "tasks": tasks_data,
+            })
+        db.add(models.WorkflowHistorySnapshot(
+            document_id=doc.id,
+            outcome=outcome,
+            rejected_at_stage=wf.stage if outcome == "rejected" else None,
+            rejection_note=rejection_note if outcome == "rejected" else None,
+            initiated_at=wf.started_at,
+            mode=wf.mode,
+            snapshot={"levels": levels_data},
+        ))
+    except Exception:
+        import traceback as _tb
+        print("Snapshot save error:", _tb.format_exc())
+
+
 # ─── Inbox & overview ────────────────────────────────────────────────────────
 
 @router.get("/inbox", response_model=List[schemas.DocumentListItem])
@@ -93,13 +137,16 @@ def my_inbox(db: Session = Depends(get_db),
 @router.get("/pending", response_model=List[schemas.DocumentListItem])
 def all_pending(db: Session = Depends(get_db),
                 current_user: models.User = Depends(get_current_user)):
+    # Only show docs actively in Check / Review / Approve — not Prepare (still being authored)
     wfs = db.query(models.WorkflowInstance).filter(
-        models.WorkflowInstance.completed == False
+        models.WorkflowInstance.completed == False,
+        models.WorkflowInstance.stage.in_(["Check", "Review", "Approve"]),
     ).all()
     doc_ids = [w.document_id for w in wfs]
+    if not doc_ids:
+        return []
     return db.query(models.Document).filter(
         models.Document.id.in_(doc_ids),
-        models.Document.status != "Draft"
     ).all()
 
 
@@ -174,7 +221,7 @@ def initiate_workflow(
                 workflow_id=wf.id, level_id=wf_level.id, step=step,
                 assignee_id=current_user.id, status="Approved",
                 digital_sig_log={"user": current_user.name, "action": "Initiated",
-                                 "timestamp": datetime.utcnow().isoformat()},
+                                 "timestamp": datetime.utcnow().isoformat() + 'Z'},
                 completed_at=datetime.utcnow(),
             )
             db.add(t)
@@ -277,7 +324,7 @@ def workflow_action(
     # Capture digital signature log
     task.digital_sig_log = {
         "user": current_user.name, "user_id": current_user.id,
-        "action": data.action, "timestamp": datetime.utcnow().isoformat(),
+        "action": data.action, "timestamp": datetime.utcnow().isoformat() + 'Z',
         "ip": request.client.host if request.client else "",
         "note": data.note or "",
     }
@@ -296,6 +343,9 @@ def workflow_action(
 
         # Log before delete
         _log(db, current_user, doc, f"Workflow Rejected at {rejection_level}", rejection_note)
+
+        # Preserve workflow history before deletion
+        _save_wf_snapshot(db, doc, wf, "rejected", rejection_note)
 
         # Delete the workflow so author can re-initiate after fixing
         db.delete(wf)
@@ -328,6 +378,9 @@ def workflow_action(
 
     if next_step > wf.total_steps:
         # Final approval → Released (30)
+        # Preserve workflow history snapshot before closing
+        _save_wf_snapshot(db, doc, wf, "released")
+
         wf.stage       = "Released"
         wf.completed   = True
         wf.completed_at = datetime.utcnow()
@@ -476,7 +529,7 @@ def workflow_status(
         "completed": bool(wf.completed),
         "rejected": bool(wf.rejected),
         "rejection_reason": wf.rejection_reason,
-        "started_at": wf.started_at.isoformat() if wf.started_at else None,
+        "started_at": _iso(wf.started_at),
         "levels": [
             {
                 "id": lv.id,
@@ -496,7 +549,7 @@ def workflow_status(
                         "checklist_file_name": t.checklist_file_name,
                         "checklist_file_path": t.checklist_file_path,
                         "action_note": t.action_note,
-                        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                        "completed_at": _iso(t.completed_at),
                         "assignee": {
                             "id": t.assignee.id,
                             "name": t.assignee.name,
@@ -701,3 +754,42 @@ def download_completed_checklist(
         filename=task.checklist_file_name or "completed_checklist",
         media_type="application/octet-stream",
     )
+
+
+# ─── Download checklist from workflow history snapshot ────────────────────────
+
+@router.get("/{doc_id}/history-checklist/download")
+def download_history_checklist(
+    doc_id: int,
+    path: str,
+    token: str = None,
+    db: Session = Depends(get_db),
+):
+    """Serve a checklist file preserved in workflow history snapshots. Accepts token as query param."""
+    from fastapi.responses import FileResponse as _FR
+    import os as _os
+    # Authenticate via token query param (same pattern as view_file)
+    user = None
+    if token:
+        try:
+            from jose import jwt
+            from routers.auth import SECRET_KEY, ALGORITHM
+            p   = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            uid = p.get("sub")
+            if uid:
+                user = db.query(models.User).filter(
+                    models.User.id == int(uid), models.User.is_active == True
+                ).first()
+        except Exception:
+            pass
+    if not user:
+        raise HTTPException(401, "Unauthorized")
+    # Security: restrict to uploads/checklists directory
+    base   = _os.path.abspath("uploads/checklists")
+    target = _os.path.abspath(path)
+    if not target.startswith(base):
+        raise HTTPException(403, "Access denied")
+    if not _os.path.exists(target):
+        raise HTTPException(404, "Checklist file not found")
+    filename = _os.path.basename(target)
+    return _FR(target, filename=filename, media_type="application/octet-stream")

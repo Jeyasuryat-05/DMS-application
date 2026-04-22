@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { reportsAPI, adminAPI } from '../api'
 import { Card, Metric, Badge, Spinner, Tabs, SectionHead, Btn, Empty } from '../components/ui'
+import { fmtDate, fmtDateTime } from '../utils/dates'
 
 export default function Reports() {
   const [tab, setTab] = useState('overview')
@@ -186,7 +187,7 @@ export default function Reports() {
                           <td style={{ padding: '10px 12px' }}>{d.title}</td>
                           <td style={{ padding: '10px 12px', color: '#6b7280' }}>{d.project || '—'}</td>
                           <td style={{ padding: '10px 12px' }}><Badge label={d.status} /></td>
-                          <td style={{ padding: '10px 12px' }}>{new Date(d.expiry_date).toLocaleDateString('en-IN')}</td>
+                          <td style={{ padding: '10px 12px' }}>{fmtDate(d.expiry_date)}</td>
                           <td style={{ padding: '10px 12px' }}>
                             <span style={{ fontWeight: 700, color: daysLeft < 30 ? '#A32D2D' : daysLeft < 60 ? '#854F0B' : '#374151' }}>
                               {daysLeft}d
@@ -291,7 +292,7 @@ export default function Reports() {
                     {auditLogs.map(l => (
                       <tr key={l.id} style={{ borderBottom: '1px solid #f9fafb' }}>
                         <td style={{ padding: '10px 14px', color: '#6b7280', whiteSpace: 'nowrap', fontSize: 12 }}>
-                          {new Date(l.timestamp).toLocaleString('en-IN')}
+                          {fmtDateTime(l.timestamp)}
                         </td>
                         <td style={{ padding: '10px 14px', fontWeight: 500 }}>{l.action}</td>
                         <td style={{ padding: '10px 14px' }}>{l.user?.name || '—'}</td>

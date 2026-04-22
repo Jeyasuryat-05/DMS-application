@@ -260,53 +260,30 @@ function ThreeDViewer({ url, ext }) {
 
 // ─── PDF Conversion Viewer ────────────────────────────────────────────────────
 function PdfConvertViewer({ fileId, token, filename }) {
-  const [status, setStatus] = useState('converting') // converting | done | error
-  const [errMsg, setErrMsg] = useState('')
+  const [loaded, setLoaded] = useState(false)
   const pdfUrl = `/api/convert/files/${fileId}/pdf?token=${encodeURIComponent(token)}`
 
-  useEffect(() => {
-    // Just show the iframe directly — the iframe will show an error if conversion fails
-    // We also do a GET probe to catch errors before showing a broken iframe
-    fetch(pdfUrl)
-      .then(r => {
-        if (r.ok) setStatus('done')
-        else r.json()
-              .catch(() => ({ detail: 'Conversion failed. Install required libraries.' }))
-              .then(j => { setErrMsg(j.detail || 'Conversion failed'); setStatus('error') })
-      })
-      .catch(() => setStatus('done'))
-  }, [pdfUrl])
-
-  if (status === 'converting') return (
-    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',
-      alignItems:'center',justifyContent:'center',gap:16,background:'#111'}}>
-      <div style={{width:48,height:48,border:'4px solid #185FA5',
-        borderTopColor:'transparent',borderRadius:'50%',
-        animation:'spin 0.8s linear infinite'}} />
-      <div style={{color:'#9ca3af',fontSize:14}}>Converting {filename} to PDF…</div>
-      <div style={{color:'#6b7280',fontSize:12}}>This may take a few seconds</div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
-  )
-
-  if (status === 'error') return (
-    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',
-      alignItems:'center',justifyContent:'center',gap:16,background:'#111'}}>
-      <div style={{fontSize:48}}>⚠</div>
-      <div style={{color:'#fca5a5',fontSize:16,fontWeight:600}}>Conversion failed</div>
-      <div style={{color:'#9ca3af',fontSize:13,textAlign:'center',maxWidth:480}}>{errMsg}</div>
-      <div style={{color:'#6b7280',fontSize:12,marginTop:4,textAlign:'center',maxWidth:480}}>
-        Install LibreOffice on the server for universal file conversion support.
-      </div>
-    </div>
-  )
-
+  // Load iframe directly — no probe fetch (probe would log a duplicate view count)
   return (
-    <iframe
-      src={pdfUrl}
-      style={{width:'100%',height:'100%',border:'none'}}
-      title={filename}
-    />
+    <div style={{width:'100%',height:'100%',position:'relative',background:'#111'}}>
+      {!loaded && (
+        <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',
+          alignItems:'center',justifyContent:'center',gap:16,background:'#111',zIndex:1}}>
+          <div style={{width:48,height:48,border:'4px solid #185FA5',
+            borderTopColor:'transparent',borderRadius:'50%',
+            animation:'spin 0.8s linear infinite'}} />
+          <div style={{color:'#9ca3af',fontSize:14}}>Converting {filename} to PDF…</div>
+          <div style={{color:'#6b7280',fontSize:12}}>This may take a few seconds</div>
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      )}
+      <iframe
+        src={pdfUrl}
+        onLoad={() => setLoaded(true)}
+        style={{width:'100%',height:'100%',border:'none'}}
+        title={filename}
+      />
+    </div>
   )
 }
 

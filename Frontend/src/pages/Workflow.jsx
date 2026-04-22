@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom'
 import { workflowAPI, alertsAPI } from '../api'
 import { Badge, Card, Metric, Spinner, Empty, Tabs, Btn } from '../components/ui'
 import { useAuth } from '../hooks/useAuth'
+import { fmtDate, fmtDateTime } from '../utils/dates'
 
 const C = { blue:'#0C447C', accent:'#185FA5', green:'#0F6E56', red:'#A32D2D',
             amber:'#854F0B', purple:'#534AB7', border:'#e5e7eb' }
@@ -191,7 +192,7 @@ function AlertDashboard() {
                     <td style={{ padding:'10px 12px', color:'#6b7280' }}>{d.project||'—'}</td>
                     <td style={{ padding:'10px 12px' }}><StatusBadge status={d.status} /></td>
                     <td style={{ padding:'10px 12px', whiteSpace:'nowrap' }}>
-                      {new Date(d.expiry_date).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
+                      {fmtDate(d.expiry_date, {day:'2-digit',month:'short',year:'numeric'})}
                     </td>
                     <td style={{ padding:'10px 12px' }}>
                       <span style={{ fontWeight:700, fontSize:14,
@@ -246,7 +247,7 @@ function AlertDashboard() {
                         padding:'2px 8px', fontSize:11, fontWeight:600 }}>{l.alert_type}</span>
                     </td>
                     <td style={{ padding:'8px 12px', color:'#6b7280' }}>
-                      {new Date(l.sent_at).toLocaleString('en-IN')}
+                      {fmtDateTime(l.sent_at)}
                     </td>
                     <td style={{ padding:'8px 12px' }}>{l.recipients?.length||0} recipients</td>
                     <td style={{ padding:'8px 12px' }}>

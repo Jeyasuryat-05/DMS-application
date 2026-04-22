@@ -16,7 +16,7 @@ export default function Login() {
   const [step, setStep]           = useState('login')
   const [code, setCode]           = useState('')
   const [gateToken, setGateToken] = useState(null)
-  const [email, setEmail]         = useState('')
+  const [empId, setEmpId]         = useState('')
   const [password, setPassword]   = useState('')
   const [error, setError]         = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -37,7 +37,7 @@ export default function Login() {
     setError('')
     setSubmitting(true)
 
-    const res = await login(email, password, gateToken)
+    const res = await login(empId, password, gateToken)
 
     if (res.ok) {
       // Use React Router navigate — AuthProvider already has the user set
@@ -167,11 +167,12 @@ export default function Login() {
             <form onSubmit={handleLogin} autoComplete="off">
               <div style={{ marginBottom: 14 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
-                  Email
+                  Employee ID
                 </label>
                 <input
-                  type="email" value={email}
-                  onChange={e => setEmail(e.target.value)}
+                  type="text" value={empId}
+                  onChange={e => setEmpId(e.target.value.toUpperCase())}
+                  placeholder="Enter your employee ID"
                   style={{ width: '100%', boxSizing: 'border-box' }}
                   autoComplete="off"
                   readOnly

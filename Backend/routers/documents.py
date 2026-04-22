@@ -1,15 +1,35 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import List, Optional
 from datetime import datetime, timedelta
-import os, uuid, json, traceback
+import os, uuid, json, traceback, sys as _sys
+
+def _iso(dt): return dt.isoformat() + 'Z' if dt else None
 
 from database import get_db
 from routers.auth import get_current_user
 import models
 
 router = APIRouter()
+
+# ─── Global metadata fields injected into every doc type's schema ─────────────
+_GLOBAL_META_KEY = 'directorate_group_sub_group'
+_GLOBAL_META_FIELD = None
+try:
+    _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _parent not in _sys.path:
+        _sys.path.insert(0, _parent)
+    from metadata_schemas_data import METADATA_SCHEMAS as _MS
+    for _schema in _MS.values():
+        for _f in _schema:
+            if isinstance(_f, dict) and _f.get('key') == _GLOBAL_META_KEY:
+                _GLOBAL_META_FIELD = dict(_f)
+                break
+        if _GLOBAL_META_FIELD:
+            break
+except Exception:
+    pass
 
 UPLOAD_DIR = "uploads"
 ALLOWED_FORMATS = {
@@ -42,6 +62,15 @@ def _doc_to_dict(d):
 
         doc_type_dict = None
         if d.doc_type:
+            _raw_schema = list(d.doc_type.metadata_schema or [])
+            if _GLOBAL_META_FIELD and isinstance(_raw_schema, list):
+                # Always use the canonical global field definition (replace in-place or insert at pos 2)
+                _idx = next((i for i, f in enumerate(_raw_schema) if isinstance(f, dict) and f.get('key') == _GLOBAL_META_KEY), None)
+                if _idx is not None:
+                    _raw_schema[_idx] = _GLOBAL_META_FIELD
+                else:
+                    _ins = min(2, len(_raw_schema))
+                    _raw_schema = _raw_schema[:_ins] + [_GLOBAL_META_FIELD] + _raw_schema[_ins:]
             doc_type_dict = {
                 "id": d.doc_type.id,
                 "code": d.doc_type.code or "",
@@ -51,7 +80,7 @@ def _doc_to_dict(d):
                 "is_active": bool(d.doc_type.is_active),
                 "allowed_formats": [],
                 "number_pattern": d.doc_type.number_pattern or "",
-                "metadata_schema": d.doc_type.metadata_schema if d.doc_type else [],
+                "metadata_schema": _raw_schema,
                 "description": d.doc_type.description,
             }
 
@@ -67,15 +96,15 @@ def _doc_to_dict(d):
             "status_code": d.status_code or "05",
             "confidential": bool(d.confidential),
             "checked_out": bool(d.checked_out),
-            "created_at": d.created_at.isoformat() if d.created_at else None,
-            "updated_at": d.updated_at.isoformat() if d.updated_at else None,
-            "expiry_date": d.expiry_date.isoformat() if d.expiry_date else None,
-            "renewal_date": d.renewal_date.isoformat() if d.renewal_date else None,
-            "revision_due": d.revision_due.isoformat() if d.revision_due else None,
+            "created_at": _iso(d.created_at),
+            "updated_at": _iso(d.updated_at),
+            "expiry_date": _iso(d.expiry_date),
+            "renewal_date": _iso(d.renewal_date),
+            "revision_due": _iso(d.revision_due),
             "tags": d.tags or [],
             "custom_metadata": d.custom_metadata or {},
             "flagged_for_deletion": bool(d.flagged_for_deletion),
-            "flagged_at": d.flagged_at.isoformat() if d.flagged_at else None,
+            "flagged_at": _iso(d.flagged_at),
             "flagged_by_id": d.flagged_by_id,
             "doc_type": doc_type_dict,
             "workflow": workflow_dict,
@@ -91,7 +120,6 @@ def list_documents(
     q: Optional[str] = Query(None),
     doc_type_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
-    project: Optional[str] = Query(None),
     confidential: Optional[bool] = Query(None),
     expiring_days: Optional[int] = Query(None),
     skip: int = Query(0),
@@ -112,8 +140,6 @@ def list_documents(
             query = query.filter(models.Document.doc_type_id == doc_type_id)
         if status:
             query = query.filter(models.Document.status == status)
-        if project:
-            query = query.filter(models.Document.project.ilike(f"%{project}%"))
         if confidential is not None:
             query = query.filter(models.Document.confidential == confidential)
         if expiring_days:
@@ -164,7 +190,7 @@ def get_document(
                 "id": v.id, "version_number": v.version_number,
                 "is_major": bool(v.is_major), "change_reason": v.change_reason,
                 "change_label": v.change_label,
-                "created_at": v.created_at.isoformat() if v.created_at else None,
+                "created_at": _iso(v.created_at),
                 "created_by": {"id": v.created_by.id, "name": v.created_by.name} if v.created_by else None,
             }
             for v in (doc.versions or [])
@@ -173,14 +199,14 @@ def get_document(
             {
                 "id": f.id, "filename": f.filename, "file_size": f.file_size,
                 "mime_type": f.mime_type, "file_format": f.file_format,
-                "uploaded_at": f.uploaded_at.isoformat() if f.uploaded_at else None,
+                "uploaded_at": _iso(f.uploaded_at),
             }
             for f in (doc.files or [])
         ]
         base["feedbacks"] = [
             {
                 "id": fb.id, "comment": fb.comment,
-                "created_at": fb.created_at.isoformat() if fb.created_at else None,
+                "created_at": _iso(fb.created_at),
                 "user": {"id": fb.user.id, "name": fb.user.name} if fb.user else None,
                 "tagged_user": {"id": fb.tagged_user.id, "name": fb.tagged_user.name} if fb.tagged_user else None,
             }
@@ -189,7 +215,9 @@ def get_document(
         base["audit_logs"] = [
             {
                 "id": al.id, "action": al.action, "note": al.note,
-                "timestamp": al.timestamp.isoformat() if al.timestamp else None,
+                "old_value": al.old_value,
+                "new_value": al.new_value,
+                "timestamp": _iso(al.timestamp),
                 "user": {"id": al.user.id, "name": al.user.name} if al.user else None,
             }
             for al in (doc.audit_logs or [])
@@ -201,6 +229,24 @@ def get_document(
             }
             for r in (doc.references or [])
         ]
+        # Workflow history snapshots (rejected + released)
+        snapshots = db.query(models.WorkflowHistorySnapshot).filter(
+            models.WorkflowHistorySnapshot.document_id == doc.id
+        ).order_by(models.WorkflowHistorySnapshot.snapshot_at).all()
+        base["workflow_history"] = [
+            {
+                "id": s.id,
+                "outcome": s.outcome,
+                "rejected_at_stage": s.rejected_at_stage,
+                "rejection_note": s.rejection_note,
+                "snapshot_at": _iso(s.snapshot_at),
+                "initiated_at": _iso(s.initiated_at),
+                "mode": s.mode,
+                "snapshot": s.snapshot,
+            }
+            for s in snapshots
+        ]
+
         if doc.workflow:
             wf = doc.workflow
             # Build level lookup for task enrichment
@@ -233,7 +279,7 @@ def get_document(
                             "checklist_done": bool(t.checklist_done),
                             "checklist_file_name": t.checklist_file_name,
                             "action_note": t.action_note,
-                            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                            "completed_at": _iso(t.completed_at),
                             "assignee": {"id": t.assignee.id, "name": t.assignee.name} if t.assignee else None,
                         }
                         for t in (lv.tasks or [])
@@ -394,25 +440,44 @@ def update_document(
         DATE_FIELDS = {"expiry_date", "renewal_date", "revision_due"}
         SKIP_FIELDS = {"id", "doc_number", "creator_id", "status", "current_version"}
 
+        # Snapshot old custom_metadata before any changes
+        old_cm = dict(doc.custom_metadata or {})
+
+        # Parse incoming custom_metadata early for diffing
+        _raw_cm = data.get("custom_metadata") or {}
+        if isinstance(_raw_cm, str):
+            try: incoming_cm = json.loads(_raw_cm)
+            except Exception: incoming_cm = {}
+        else:
+            incoming_cm = dict(_raw_cm)
+
+        def _s(v):
+            if v is None or v == '': return None
+            if hasattr(v, 'isoformat'): return v.isoformat().split('T')[0]
+            return str(v)
+
+        changes_old, changes_new = {}, {}
+
         for k, v in data.items():
             if k in SKIP_FIELDS or not hasattr(doc, k):
                 continue
+            if k == 'custom_metadata':
+                # Applied explicitly below after diffing
+                continue
+            old_raw = getattr(doc, k)
             if k in DATE_FIELDS:
                 if v:
-                    try:
-                        v = datetime.fromisoformat(str(v).split("T")[0])
-                    except (ValueError, TypeError):
-                        v = None
+                    try: v = datetime.fromisoformat(str(v).split("T")[0])
+                    except (ValueError, TypeError): v = None
                 else:
                     v = None
             setattr(doc, k, v)
+            o, n = _s(old_raw), _s(v)
+            if o != n:
+                changes_old[k.replace('_', ' ').title()] = o
+                changes_new[k.replace('_', ' ').title()] = n
 
         # Validate: revision_due must not be later than expiry_date
-        incoming_cm = data.get("custom_metadata") or {}
-        if isinstance(incoming_cm, str):
-            try: incoming_cm = json.loads(incoming_cm)
-            except Exception: incoming_cm = {}
-
         _exp = incoming_cm.get("expiry_date") or (doc.expiry_date.isoformat() if doc.expiry_date else None)
         _rev = incoming_cm.get("revision_due") or (doc.revision_due.isoformat() if doc.revision_due else None)
         if _exp and _rev:
@@ -424,30 +489,45 @@ def update_document(
             except Exception:
                 pass
 
-        # Sync core fields from custom_metadata payload (incoming_cm already parsed above)
-        # Date fields
+        # Sync date fields from custom_metadata
         for meta_key, core_attr in [("expiry_date", "expiry_date"), ("revision_due", "revision_due")]:
             if meta_key in incoming_cm:
                 raw = incoming_cm[meta_key]
                 if raw:
-                    try:
-                        setattr(doc, core_attr, datetime.fromisoformat(str(raw).split("T")[0]))
-                    except (ValueError, TypeError):
-                        pass
+                    try: setattr(doc, core_attr, datetime.fromisoformat(str(raw).split("T")[0]))
+                    except (ValueError, TypeError): pass
                 else:
                     setattr(doc, core_attr, None)
 
-        # Text core fields — usi_kks_code can be stored under "usi" or "usi_kks_code" in schema
+        # Sync text core fields from custom_metadata
         for meta_key, core_attr in [("usi", "usi_kks_code"), ("usi_kks_code", "usi_kks_code"), ("project", "project")]:
             if meta_key in incoming_cm:
                 val = incoming_cm[meta_key]
                 setattr(doc, core_attr, val if val else None)
 
-        # Ensure SQLAlchemy detects mutation of the JSON column
+        # Apply custom_metadata — merge incoming over existing
+        if 'custom_metadata' in data:
+            merged_cm = {**old_cm, **incoming_cm}
+            doc.custom_metadata = merged_cm
+
+        # Track individual custom_metadata field changes
+        for mk, new_v in incoming_cm.items():
+            old_v = old_cm.get(mk)
+            o, n = _s(old_v), _s(new_v)
+            if o != n:
+                label = mk.replace('_', ' ').title()
+                changes_old[label] = o
+                changes_new[label] = n
+
         flag_modified(doc, "custom_metadata")
         doc.updated_at = datetime.utcnow()
 
-        db.add(models.AuditLog(document_id=doc.id, user_id=current_user.id, action="Metadata Updated"))
+        db.add(models.AuditLog(
+            document_id=doc.id, user_id=current_user.id,
+            action="Metadata Updated",
+            old_value=changes_old if changes_old else None,
+            new_value=changes_new if changes_new else None,
+        ))
         db.commit()
         return {"message": "Updated"}
     except HTTPException:
@@ -664,6 +744,8 @@ def download_file(
         raise HTTPException(404, "File not found")
     db.add(models.AuditLog(document_id=doc_id, user_id=current_user.id,
                            action="File Downloaded", note=f.filename))
+    db.add(models.FileAccessLog(document_id=doc_id, file_id=file_id,
+                                user_id=current_user.id, action="download"))
     db.commit()
     return FileResponse(f.file_path, filename=f.filename)
 
@@ -674,6 +756,7 @@ def download_file(
 def view_file(
     doc_id: int,
     file_id: int,
+    request: Request,
     token: str = None,              # Accept token as query param for iframe/img src
     db: Session = Depends(get_db),
 ):
@@ -734,9 +817,13 @@ def view_file(
         }
         mime = mime_map.get(ext, "application/octet-stream")
 
-    db.add(models.AuditLog(document_id=doc_id, user_id=user.id,
-                           action="File Viewed Online", note=f.filename))
-    db.commit()
+    # Only log on the initial full request — range requests are browser PDF/video seeking
+    if not request.headers.get("range"):
+        db.add(models.AuditLog(document_id=doc_id, user_id=user.id,
+                               action="File Viewed Online", note=f.filename))
+        db.add(models.FileAccessLog(document_id=doc_id, file_id=file_id,
+                                    user_id=user.id, action="view"))
+        db.commit()
 
     # Serve inline — browser renders it directly
     return FileResponse(
@@ -744,6 +831,54 @@ def view_file(
         media_type=mime,
         headers={"Content-Disposition": f"inline; filename={f.filename}"},
     )
+
+
+# ─── Add file to existing document (Draft/Created only) ───────────────────────
+
+@router.post("/{doc_id}/files")
+def add_file(
+    doc_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if doc.status not in ("Draft", "Created"):
+        raise HTTPException(403,
+            f"Files can only be added when the document is in Draft or Created status. "
+            f"Current status is '{doc.status}'."
+        )
+    _blocking = {'Check', 'Review', 'Approve'}
+    if doc.workflow and not doc.workflow.completed and doc.workflow.stage in _blocking:
+        raise HTTPException(403, "Cannot add files while the approval workflow is in progress.")
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_FORMATS:
+        raise HTTPException(400, f"File type '{ext}' is not allowed. Allowed: {', '.join(ALLOWED_FORMATS)}")
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}{ext}")
+    content = file.file.read()
+    with open(path, "wb") as f:
+        f.write(content)
+
+    file_format = ext.lstrip(".").upper()
+    size_kb = round(len(content) / 1024, 1)
+
+    db.add(models.DocumentFile(
+        document_id=doc_id, filename=file.filename, file_path=path,
+        file_size=len(content), mime_type=file.content_type,
+        file_format=file_format, uploaded_by=current_user.id,
+    ))
+    db.add(models.AuditLog(
+        document_id=doc_id, user_id=current_user.id,
+        action="File Added",
+        note=f"{file.filename} ({file_format}, {size_kb} KB)",
+    ))
+    db.commit()
+    return {"message": "File added"}
 
 
 # ─── Soft delete ──────────────────────────────────────────────────────────────
@@ -833,7 +968,8 @@ def delete_file(
             f"Files can only be deleted when the document is in Draft or Created status. "
             f"Current status is '{doc.status}'."
         )
-    if doc.workflow and not doc.workflow.completed:
+    _blocking = {'Check', 'Review', 'Approve'}
+    if doc.workflow and not doc.workflow.completed and doc.workflow.stage in _blocking:
         raise HTTPException(403,
             "Cannot delete files while the approval workflow is in progress."
         )
@@ -852,11 +988,56 @@ def delete_file(
     except Exception:
         pass  # Don't block deletion if file is already missing
 
+    size_kb = round((f.file_size or 0) / 1024, 1)
     db.add(models.AuditLog(
         document_id=doc_id,
         user_id=current_user.id,
-        action="File Deleted",
-        note=f.filename,
+        action="File Removed",
+        note=f"{f.filename} ({f.file_format or 'FILE'}, {size_kb} KB)",
     ))
     db.delete(f)
     db.commit()
+
+
+# ─── File Access Stats ─────────────────────────────────────────────────────────
+
+@router.get("/{doc_id}/file-access-stats")
+def file_access_stats(
+    doc_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Return per-file view/download counts with user breakdown."""
+    doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    logs = db.query(models.FileAccessLog).filter(
+        models.FileAccessLog.document_id == doc_id
+    ).all()
+
+    stats = {}
+    for entry in logs:
+        fid = entry.file_id
+        if fid not in stats:
+            stats[fid] = {"file_id": fid, "filename": None, "view_count": 0, "download_count": 0, "viewers": {}, "downloaders": {}}
+        if entry.file:
+            stats[fid]["filename"] = entry.file.filename
+        uid = entry.user_id
+        uname = entry.user.name if entry.user else "Unknown"
+        if entry.action == "view":
+            stats[fid]["view_count"] += 1
+            stats[fid]["viewers"][uid] = {"id": uid, "name": uname, "count": stats[fid]["viewers"].get(uid, {}).get("count", 0) + 1}
+        elif entry.action == "download":
+            stats[fid]["download_count"] += 1
+            stats[fid]["downloaders"][uid] = {"id": uid, "name": uname, "count": stats[fid]["downloaders"].get(uid, {}).get("count", 0) + 1}
+
+    for fid, s in stats.items():
+        s["viewers"] = sorted(s["viewers"].values(), key=lambda x: -x["count"])
+        s["downloaders"] = sorted(s["downloaders"].values(), key=lambda x: -x["count"])
+
+    return {
+        "by_file": list(stats.values()),
+        "total_views": sum(s["view_count"] for s in stats.values()),
+        "total_downloads": sum(s["download_count"] for s in stats.values()),
+    }

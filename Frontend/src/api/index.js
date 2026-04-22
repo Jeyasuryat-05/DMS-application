@@ -49,9 +49,11 @@ export const authAPI = {
     const headers = gate ? { 'X-Gate-Token': gate } : {}
     return api.post('/auth/login', form, { headers })
   },
-  me:          ()                      => api.get('/auth/me'),
-  register:    (data)                  => api.post('/auth/register', data),
-  ssoMetadata: ()                      => api.get('/auth/sso/metadata'),
+  me:                   ()       => api.get('/auth/me'),
+  register:             (data)   => api.post('/auth/register', data),
+  ssoMetadata:          ()       => api.get('/auth/sso/metadata'),
+  uploadProfilePicture:  (formData) => api.post('/auth/profile/picture', formData),
+  removeProfilePicture:  ()         => api.delete('/auth/profile/picture'),
 }
 
 // ─── Documents ────────────────────────────────────────────────────────────────
@@ -77,9 +79,11 @@ export const documentsAPI = {
   getShareLink:  (id, version)         => api.get(`/documents/${id}/share-link`, {
     params: { version }
   }),
+  addFile:       (docId, formData)      => api.post(`/documents/${docId}/files`, formData),
   deleteFile:    (docId, fileId)       => api.delete(`/documents/${docId}/files/${fileId}`),
-  flagDeletion:  (id)                  => api.post(`/documents/${id}/flag-deletion`),
-  unflagDeletion:(id)                  => api.delete(`/documents/${id}/flag-deletion`),
+  flagDeletion:     (id)                  => api.post(`/documents/${id}/flag-deletion`),
+  unflagDeletion:   (id)                  => api.delete(`/documents/${id}/flag-deletion`),
+  fileAccessStats:  (id)                  => api.get(`/documents/${id}/file-access-stats`),
 }
 
 // ─── Converter ───────────────────────────────────────────────────────────────
