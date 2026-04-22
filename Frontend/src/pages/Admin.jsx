@@ -10,6 +10,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { adminAPI, authAPI } from '../api'
+import { useNavigate } from 'react-router-dom'
 
 // ─── palette ──────────────────────────────────────────────────────────────────
 const C = {
@@ -1152,86 +1153,315 @@ function SystemConfigPanel({ toast }) {
         </div>
       </div>
 
-      {/* ── Preparation Stage Field Restrictions ── */}
-      <div style={sectionStyle}>
-        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
-          <div style={{fontSize:20}}>🔒</div>
-          <div>
-            <div style={{fontWeight:700,fontSize:15}}>Preparation Stage Field Restrictions</div>
-            <div style={{fontSize:12,color:C.gray}}>
-              Fields marked <strong style={{color:C.red}}>Restricted</strong> are read-only for regular users during document preparation (Draft / Created status). Toggle ON to restrict, OFF to allow editing.
-            </div>
-          </div>
-        </div>
-
-        {(() => {
-          const lockedFields = (form.prepare_locked_fields||'').split(',').map(s=>s.trim()).filter(Boolean)
-          function toggleField(key) {
-            const updated = lockedFields.includes(key)
-              ? lockedFields.filter(k => k !== key)
-              : [...lockedFields, key]
-            set('prepare_locked_fields', updated.join(','))
-          }
-          function FieldRow({ key: fkey, label, hint, last }) {
-            const locked = lockedFields.includes(fkey)
-            return (
-              <div style={{display:'flex',alignItems:'center',gap:12,padding:'11px 0',borderBottom:last?'none':`1px solid ${C.border}`}}>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:13,color:'#111'}}>{label}</div>
-                  <div style={{fontSize:11,color:C.gray,marginTop:2}}>{hint}</div>
-                </div>
-                <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <span style={{fontSize:12,color:locked?C.red:C.green,fontWeight:600,minWidth:68,textAlign:'right'}}>
-                    {locked ? 'Restricted' : 'Editable'}
-                  </span>
-                  <div style={{width:44,height:24,borderRadius:12,cursor:'pointer',background:locked?C.red:'#d1d5db',position:'relative',transition:'background 0.2s',flexShrink:0}} onClick={()=>toggleField(fkey)}>
-                    <div style={{position:'absolute',top:3,left:locked?20:3,width:18,height:18,borderRadius:'50%',background:'#fff',transition:'left 0.2s',boxShadow:'0 1px 3px rgba(0,0,0,0.2)'}} />
-                  </div>
-                </div>
-              </div>
-            )
-          }
-
-          return (
-            <>
-              {/* Core document fields */}
-              <div style={{fontSize:11,fontWeight:700,color:C.gray,textTransform:'uppercase',letterSpacing:0.5,marginBottom:4}}>Core Document Fields</div>
-              <div style={{background:'#f8fafc',borderRadius:8,padding:'0 14px',marginBottom:14,border:`1px solid ${C.border}`}}>
-                {[
-                  { key:'title',        label:'Title',          hint:'Document title' },
-                  { key:'project',      label:'Project',        hint:'Project / plant name' },
-                  { key:'usi_kks_code', label:'USI / KKS Code', hint:'Plant or system identification code' },
-                  { key:'expiry_date',  label:'Expiry Date',    hint:'Document expiry date' },
-                  { key:'revision_due', label:'Revision Due',   hint:'Next revision due date' },
-                  { key:'confidential', label:'Confidential',   hint:'Confidential flag' },
-                ].map((f, i, arr) => <FieldRow key={f.key} {...f} last={i===arr.length-1} />)}
-              </div>
-
-              {/* Common custom metadata fields */}
-              <div style={{fontSize:11,fontWeight:700,color:C.gray,textTransform:'uppercase',letterSpacing:0.5,marginBottom:4}}>Common Custom Metadata Fields</div>
-              <div style={{background:'#f8fafc',borderRadius:8,padding:'0 14px',border:`1px solid ${C.border}`}}>
-                {[
-                  { key:'description',  label:'Description',    hint:'Free-text description field in document metadata' },
-                  { key:'drawing_type', label:'Drawing Type',    hint:'Category / type of the engineering drawing' },
-                  { key:'origin',       label:'Origin',          hint:'Origin / source of the document' },
-                  { key:'purpose',      label:'Purpose',         hint:'Intended purpose or use of the document' },
-                ].map((f, i, arr) => <FieldRow key={f.key} {...f} last={i===arr.length-1} />)}
-              </div>
-            </>
-          )
-        })()}
-      </div>
-
       <GBtn label={saving?'Saving…':'Save All Configuration'} onClick={save} disabled={saving} color={C.blue} />
     </div>
   )
 }
 
+// ─── Flagged Documents Panel ──────────────────────────────────────────────────
+function FlaggedDocumentsPanel({ toast }) {
+  const [docs, setDocs]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
+  const nav = useNavigate()
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await adminAPI.flaggedDocuments()
+      setDocs(r.data)
+    } catch {
+      setDocs([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleRunJob() {
+    if (!window.confirm(`Run the deletion job now? This will permanently delete ${docs.length} flagged document(s).`)) return
+    setRunning(true)
+    try {
+      const r = await adminAPI.runDeletionJob()
+      toast(`${r.data.deleted} document(s) deleted successfully.`, 'success')
+      load()
+    } catch (e) {
+      toast(e.response?.data?.detail || 'Job failed', 'error')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div>
+      {/* Header row */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <div>
+          <span style={{ fontWeight:700, fontSize:15 }}>🚩 Documents Flagged for Deletion</span>
+          <span style={{ marginLeft:10, fontSize:12, color:C.gray }}>
+            Scheduled automatic cleanup runs daily at 12:00 AM IST
+          </span>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <GBtn label="↻ Refresh" onClick={load} color={C.blue} />
+          <GBtn
+            label={running ? 'Running…' : `Run Deletion Job (${docs.length})`}
+            onClick={handleRunJob}
+            color={C.red}
+            disabled={running || docs.length === 0}
+          />
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ color:C.gray, fontSize:13 }}>Loading…</div>
+      ) : docs.length === 0 ? (
+        <div style={{
+          border:`1px solid ${C.border}`, borderRadius:8, padding:'32px 20px',
+          textAlign:'center', color:C.gray, fontSize:13,
+        }}>
+          No documents are currently flagged for deletion.
+        </div>
+      ) : (
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:C.bg }}>
+              {['Doc Number','Title','Status','Flagged At'].map(h => (
+                <th key={h} style={{ padding:'8px 12px', textAlign:'left', fontWeight:600,
+                  borderBottom:`1px solid ${C.border}`, color:C.blue }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {docs.map(d => (
+              <tr key={d.id} style={{ borderBottom:`1px solid ${C.border}` }}
+                onMouseEnter={e => e.currentTarget.style.background=C.rowHover}
+                onMouseLeave={e => e.currentTarget.style.background=''}>
+                <td style={{ padding:'8px 12px' }}>
+                  <span
+                    onClick={() => nav(`/documents/${d.id}`)}
+                    style={{ color:C.accent, cursor:'pointer', fontWeight:600 }}>
+                    {d.doc_number}
+                  </span>
+                </td>
+                <td style={{ padding:'8px 12px' }}>{d.title}</td>
+                <td style={{ padding:'8px 12px' }}>
+                  <Chip label={d.status} color={C.amber} />
+                </td>
+                <td style={{ padding:'8px 12px', color:C.gray }}>
+                  {d.flagged_at ? new Date(d.flagged_at).toLocaleString('en-IN', { timeZone:'Asia/Kolkata' }) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+
+// ─── Activity Logs Panel ──────────────────────────────────────────────────────
+function ActivityLogsPanel({ toast }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [logType,   setLogType]   = useState('deletions')
+  const [dateFrom,  setDateFrom]  = useState(today)
+  const [dateTo,    setDateTo]    = useState(today)
+  const [docTypeId, setDocTypeId] = useState('')
+  const [allTypes,  setAllTypes]  = useState([])
+  const [rows,      setRows]      = useState([])
+  const [summary,   setSummary]   = useState([])
+  const [loading,   setLoading]   = useState(false)
+  const nav = useNavigate()
+
+  useEffect(() => {
+    adminAPI.listDocTypes().then(r => setAllTypes(r.data)).catch(() => {})
+    adminAPI.logsSummary().then(r => setSummary(r.data)).catch(() => {})
+  }, [])
+
+  const buildParams = useCallback(() => {
+    const p = {}
+    if (dateFrom)  p.date_from    = dateFrom
+    if (dateTo)    p.date_to      = dateTo
+    if (docTypeId) p.doc_type_id  = docTypeId
+    return p
+  }, [dateFrom, dateTo, docTypeId])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const fn = logType === 'deletions' ? adminAPI.deletionLogs : adminAPI.creationLogs
+      const r  = await fn(buildParams())
+      setRows(r.data)
+    } catch {
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }, [logType, buildParams])
+
+  useEffect(() => { load() }, [load])
+
+  function handleDownload() {
+    const token = localStorage.getItem('dms_token')
+    const fn    = logType === 'deletions' ? adminAPI.deletionLogsDownload : adminAPI.creationLogsDownload
+    fetch(fn(buildParams()), { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.blob())
+      .then(blob => {
+        const label = dateFrom === dateTo ? dateFrom : `${dateFrom}_to_${dateTo}`
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = `${logType}_log_${label || 'all'}.csv`
+        a.click()
+      })
+      .catch(() => toast('Download failed', 'error'))
+  }
+
+  // Clicking a day card sets both from & to to that single day
+  function selectDay(d) { setDateFrom(d); setDateTo(d) }
+
+  const typeColor = logType === 'deletions' ? C.red : C.green
+  const cols = ['Timestamp (IST)', 'Action', 'Doc Number', 'Title', 'Doc Type', 'Status', 'Version', 'User', 'Note']
+
+  const rangeLabel = dateFrom === dateTo
+    ? dateFrom
+    : `${dateFrom || '…'} → ${dateTo || '…'}`
+
+  return (
+    <div>
+      {/* Summary strip — last 7 days */}
+      {summary.length > 0 && (
+        <div style={{ display:'flex', gap:8, marginBottom:20, overflowX:'auto', paddingBottom:4 }}>
+          {summary.slice(0, 7).map(s => {
+            const active = s.date >= (dateFrom || '') && s.date <= (dateTo || s.date)
+            return (
+              <div key={s.date} style={{
+                minWidth:110, border:`1px solid ${C.border}`, borderRadius:8,
+                padding:'8px 12px', fontSize:12, cursor:'pointer',
+                background: active ? C.lightBlue : '#fff',
+                outline: active ? `2px solid ${C.blue}` : 'none',
+              }} onClick={() => selectDay(s.date)}>
+                <div style={{ fontWeight:600, marginBottom:4, color:C.blue }}>{s.date}</div>
+                <div style={{ color:C.red }}  >🗑 {s.deletions} deleted</div>
+                <div style={{ color:C.green }}>📄 {s.creations} created</div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{ display:'flex', gap:10, alignItems:'flex-end', marginBottom:16, flexWrap:'wrap' }}>
+        {/* Log type toggle */}
+        <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1px solid ${C.border}` }}>
+          {[['deletions','🗑 Deletion Log'],['creations','📄 Creation Log']].map(([id, label]) => (
+            <button key={id} onClick={() => setLogType(id)} style={{
+              padding:'7px 16px', border:'none', cursor:'pointer', fontSize:12, fontWeight:600,
+              background: logType === id ? (id === 'deletions' ? C.red : C.green) : '#fff',
+              color: logType === id ? '#fff' : C.gray,
+              fontFamily:'inherit',
+            }}>{label}</button>
+          ))}
+        </div>
+
+        <div>
+          <div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>From Date (IST)</div>
+          <input type="date" value={dateFrom} max={dateTo || today}
+            onChange={e => setDateFrom(e.target.value)}
+            style={{ padding:'6px 10px', border:`1px solid ${C.border}`, borderRadius:7, fontSize:13 }} />
+        </div>
+
+        <div>
+          <div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>To Date (IST)</div>
+          <input type="date" value={dateTo} min={dateFrom} max={today}
+            onChange={e => setDateTo(e.target.value)}
+            style={{ padding:'6px 10px', border:`1px solid ${C.border}`, borderRadius:7, fontSize:13 }} />
+        </div>
+
+        <div>
+          <div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Document Type</div>
+          <select value={docTypeId} onChange={e => setDocTypeId(e.target.value)}
+            style={{ padding:'6px 10px', border:`1px solid ${C.border}`, borderRadius:7, fontSize:13 }}>
+            <option value=''>All Types</option>
+            {allTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+
+        <div style={{ display:'flex', gap:6, alignItems:'flex-end' }}>
+          <GBtn label="Clear" onClick={() => { setDateFrom(''); setDateTo(''); setDocTypeId('') }} color={C.gray} />
+          <GBtn label="↻ Refresh" onClick={load} color={C.blue} />
+          <GBtn label="⬇ Download CSV" onClick={handleDownload} color={typeColor} disabled={rows.length === 0} />
+        </div>
+      </div>
+
+      {/* Record count */}
+      <div style={{ fontSize:12, color:C.gray, marginBottom:8 }}>
+        {loading ? 'Loading…' : `${rows.length} record(s) found`}
+        {rangeLabel && <span> for <strong>{rangeLabel}</strong></span>}
+      </div>
+
+      {/* Table */}
+      {!loading && rows.length === 0 ? (
+        <div style={{ border:`1px solid ${C.border}`, borderRadius:8, padding:'32px 20px',
+          textAlign:'center', color:C.gray, fontSize:13 }}>
+          No records found for the selected filters.
+        </div>
+      ) : (
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+            <thead>
+              <tr style={{ background:C.bg }}>
+                {cols.map(h => (
+                  <th key={h} style={{ padding:'8px 10px', textAlign:'left', fontWeight:600,
+                    borderBottom:`1px solid ${C.border}`, color:C.blue, whiteSpace:'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id} style={{ borderBottom:`1px solid ${C.border}` }}
+                  onMouseEnter={e => e.currentTarget.style.background=C.rowHover}
+                  onMouseLeave={e => e.currentTarget.style.background=''}>
+                  <td style={{ padding:'7px 10px', whiteSpace:'nowrap', color:C.gray }}>{r.timestamp_ist}</td>
+                  <td style={{ padding:'7px 10px' }}>
+                    <Chip label={r.action}
+                      color={r.action.includes('Delet') ? C.red : C.green} />
+                  </td>
+                  <td style={{ padding:'7px 10px' }}>
+                    {r.doc_id ? (
+                      <span onClick={() => nav(`/documents/${r.doc_id}`)}
+                        style={{ color:C.accent, cursor:'pointer', fontWeight:600 }}>
+                        {r.doc_number}
+                      </span>
+                    ) : r.doc_number || '—'}
+                  </td>
+                  <td style={{ padding:'7px 10px', maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                    title={r.doc_title}>{r.doc_title || '—'}</td>
+                  <td style={{ padding:'7px 10px', whiteSpace:'nowrap' }}>{r.doc_type || '—'}</td>
+                  <td style={{ padding:'7px 10px' }}>{r.status ? <Chip label={r.status} color={C.accent} /> : '—'}</td>
+                  <td style={{ padding:'7px 10px' }}>{r.version || '—'}</td>
+                  <td style={{ padding:'7px 10px', whiteSpace:'nowrap' }}>{r.user_name || '—'}</td>
+                  <td style={{ padding:'7px 10px', color:C.gray, maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                    title={r.note}>{r.note || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 // ─── Main Admin page ──────────────────────────────────────────────────────────
 const TABS = [
-  { id:'users',   label:'👤 Users' },
-  { id:'doctypes',label:'📂 Document Types' },
-  { id:'config',  label:'⚙️ System Config' },
+  { id:'users',    label:'👤 Users' },
+  { id:'doctypes', label:'📂 Document Types' },
+  { id:'config',   label:'⚙️ System Config' },
+  { id:'flagged',  label:'🚩 Flagged for Deletion' },
+  { id:'logs',     label:'📋 Activity Logs' },
 ]
 
 export default function Admin() {
@@ -1258,9 +1488,11 @@ export default function Admin() {
         ))}
       </div>
 
-      {tab==='users'    && <UsersGrid    toast={showToast} />}
-      {tab==='doctypes' && <DocTypesGrid toast={showToast} />}
-      {tab==='config'   && <SystemConfigPanel toast={showToast} />}
+      {tab==='users'    && <UsersGrid             toast={showToast} />}
+      {tab==='doctypes' && <DocTypesGrid          toast={showToast} />}
+      {tab==='config'   && <SystemConfigPanel     toast={showToast} />}
+      {tab==='flagged'  && <FlaggedDocumentsPanel toast={showToast} />}
+      {tab==='logs'     && <ActivityLogsPanel     toast={showToast} />}
 
       <Toast msg={toast?.msg} type={toast?.type} />
     </div>

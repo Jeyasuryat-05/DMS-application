@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { reportsAPI } from '../api'
+import { reportsAPI, adminAPI } from '../api'
 import { Card, Metric, Badge, Spinner, Tabs, SectionHead, Btn, Empty } from '../components/ui'
 
 export default function Reports() {
@@ -8,9 +8,13 @@ export default function Reports() {
   const [byStatus, setByStatus] = useState([])
   const [byType, setByType] = useState([])
   const [expiring, setExpiring] = useState([])
-  const [auditLogs, setAuditLogs] = useState([])
-  const [auditFilter, setAuditFilter] = useState({ action: '', date_from: '', date_to: '' })
-  const [loading, setLoading] = useState(true)
+  const [auditLogs,   setAuditLogs]   = useState([])
+  const [allDocTypes, setAllDocTypes] = useState([])
+  const [auditFilter, setAuditFilter] = useState({
+    action: '', date_from: '', date_to: '',
+    doc_type_id: '', doc_number: '', user_name: '',
+  })
+  const [loading,    setLoading]    = useState(true)
   const [expiryDays, setExpiryDays] = useState(90)
 
   useEffect(() => {
@@ -20,20 +24,25 @@ export default function Reports() {
       reportsAPI.byStatus(),
       reportsAPI.byType(),
       reportsAPI.expiring(expiryDays),
-    ]).then(([s, bs, bt, e]) => {
+      adminAPI.listDocTypes(),
+    ]).then(([s, bs, bt, e, dt]) => {
       setSummary(s.data)
       setByStatus(bs.data)
       setByType(bt.data)
       setExpiring(e.data)
+      setAllDocTypes(dt.data || [])
     }).finally(() => setLoading(false))
   }, [expiryDays])
 
   useEffect(() => {
     if (tab === 'audit') {
       const params = {}
-      if (auditFilter.action)    params.action = auditFilter.action
-      if (auditFilter.date_from) params.date_from = auditFilter.date_from
-      if (auditFilter.date_to)   params.date_to = auditFilter.date_to
+      if (auditFilter.action)      params.action      = auditFilter.action
+      if (auditFilter.date_from)   params.date_from   = auditFilter.date_from
+      if (auditFilter.date_to)     params.date_to     = auditFilter.date_to
+      if (auditFilter.doc_type_id) params.doc_type_id = auditFilter.doc_type_id
+      if (auditFilter.doc_number)  params.doc_number  = auditFilter.doc_number
+      if (auditFilter.user_name)   params.user_name   = auditFilter.user_name
       reportsAPI.audit(params).then(r => setAuditLogs(r.data))
     }
   }, [tab, auditFilter])
@@ -201,12 +210,51 @@ export default function Reports() {
       {tab === 'audit' && (
         <div>
           <Card style={{ marginBottom: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+              {/* Row 1 */}
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Doc Type</label>
+                <select
+                  value={auditFilter.doc_type_id}
+                  onChange={e => setAuditFilter(f => ({ ...f, doc_type_id: e.target.value }))}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, background: '#fff' }}
+                >
+                  <option value=''>All Doc Types</option>
+                  {allDocTypes.map(dt => (
+                    <option key={dt.id} value={dt.id}>{dt.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Document Number</label>
+                <input
+                  value={auditFilter.doc_number}
+                  onChange={e => setAuditFilter(f => ({ ...f, doc_number: e.target.value }))}
+                  placeholder="e.g. DRW-2026-0001"
+                  style={{ width: '100%', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Username</label>
+                <input
+                  value={auditFilter.user_name}
+                  onChange={e => setAuditFilter(f => ({ ...f, user_name: e.target.value }))}
+                  placeholder="Search by name…"
+                  style={{ width: '100%', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 12, alignItems: 'end' }}>
+              {/* Row 2 */}
               <div>
                 <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Filter by Action</label>
-                <input value={auditFilter.action}
+                <input
+                  value={auditFilter.action}
                   onChange={e => setAuditFilter(f => ({ ...f, action: e.target.value }))}
-                  placeholder="e.g. Approved, Downloaded…" style={{ width: '100%', boxSizing: 'border-box' }} />
+                  placeholder="e.g. Approved, Downloaded…"
+                  style={{ width: '100%', boxSizing: 'border-box' }}
+                />
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>From Date</label>
@@ -220,7 +268,10 @@ export default function Reports() {
                   onChange={e => setAuditFilter(f => ({ ...f, date_to: e.target.value }))}
                   style={{ width: '100%', boxSizing: 'border-box' }} />
               </div>
-              <Btn label="Export CSV" onClick={() => exportCSV(auditLogs, 'audit_log.csv')} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Btn label="Export CSV" onClick={() => exportCSV(auditLogs, 'audit_log.csv')} />
+                <Btn label="Clear" variant="secondary" onClick={() => setAuditFilter({ action: '', date_from: '', date_to: '', doc_type_id: '', doc_number: '', user_name: '' })} />
+              </div>
             </div>
           </Card>
 

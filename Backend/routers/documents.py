@@ -74,6 +74,9 @@ def _doc_to_dict(d):
             "revision_due": d.revision_due.isoformat() if d.revision_due else None,
             "tags": d.tags or [],
             "custom_metadata": d.custom_metadata or {},
+            "flagged_for_deletion": bool(d.flagged_for_deletion),
+            "flagged_at": d.flagged_at.isoformat() if d.flagged_at else None,
+            "flagged_by_id": d.flagged_by_id,
             "doc_type": doc_type_dict,
             "workflow": workflow_dict,
         }
@@ -744,6 +747,47 @@ def view_file(
 
 
 # ─── Soft delete ──────────────────────────────────────────────────────────────
+
+@router.post("/{doc_id}/flag-deletion")
+def flag_for_deletion(
+    doc_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    doc = db.query(models.Document).filter(
+        models.Document.id == doc_id, models.Document.is_deleted == False
+    ).first()
+    if not doc:
+        raise HTTPException(404, "Not found")
+    _blocking_stages = {'Check', 'Review', 'Approve'}
+    if doc.workflow and not doc.workflow.completed and doc.workflow.stage in _blocking_stages:
+        raise HTTPException(403, f"Cannot flag for deletion while the document is in the {doc.workflow.stage} stage. Return the workflow to Prepare first.")
+    doc.flagged_for_deletion = True
+    doc.flagged_at = datetime.utcnow()
+    doc.flagged_by_id = current_user.id
+    db.add(models.AuditLog(document_id=doc.id, user_id=current_user.id, action="Flagged for Deletion"))
+    db.commit()
+    return {"detail": "Document flagged for deletion. It will be removed in the next scheduled cleanup."}
+
+
+@router.delete("/{doc_id}/flag-deletion", status_code=200)
+def unflag_deletion(
+    doc_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    doc = db.query(models.Document).filter(
+        models.Document.id == doc_id, models.Document.is_deleted == False
+    ).first()
+    if not doc:
+        raise HTTPException(404, "Not found")
+    doc.flagged_for_deletion = False
+    doc.flagged_at = None
+    doc.flagged_by_id = None
+    db.add(models.AuditLog(document_id=doc.id, user_id=current_user.id, action="Deletion Flag Removed"))
+    db.commit()
+    return {"detail": "Deletion flag removed."}
+
 
 @router.delete("/{doc_id}", status_code=204)
 def delete_document(

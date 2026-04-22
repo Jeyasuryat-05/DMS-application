@@ -47,6 +47,9 @@ export default function DocumentDetail() {
   const [versionReason, setVersionReason] = useState('')
   const [versionIsMajor, setVersionIsMajor] = useState(false)
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
   // Metadata edit mode
   const [metaEditMode, setMetaEditMode]   = useState(false)
   const [editForm, setEditForm]           = useState({})
@@ -312,6 +315,28 @@ export default function DocumentDetail() {
     }
   }
 
+  async function handleFlagDelete() {
+    setDeleting(true)
+    try {
+      await documentsAPI.flagDeletion(id)
+      setShowDeleteConfirm(false)
+      refresh()
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Flag for deletion failed')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  async function handleUnflag() {
+    try {
+      await documentsAPI.unflagDeletion(id)
+      refresh()
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Could not remove flag')
+    }
+  }
+
   async function handleDeleteFile(fileId, filename) {
     if (!window.confirm(`Delete "${filename}"? This cannot be undone.`)) return
     try {
@@ -344,6 +369,9 @@ export default function DocumentDetail() {
 
   // Can delete document only in Draft/Created, no active workflow
   const canDelete  = (doc.status === 'Draft' || doc.status === 'Created') && !wfActive
+
+  // Flag for deletion: allowed in Prepare (or no workflow); blocked only during Check/Review/Approve
+  const canFlagDelete = !wfActive   // wfActive is only true when stage is In Check/Review/Approval
 
   // Find the current user's pending task at the active step
   const myPendingTask = wf && !wf.completed
@@ -484,7 +512,89 @@ export default function DocumentDetail() {
           title="Generate a shareable link that always points to the latest version of this document. Anyone with the link can view it." />
         <Btn label="Share v" onClick={() => handleShare(doc.current_version)} icon="📌"
           title={`Generate a shareable link pinned specifically to the current version (v${doc.current_version}). The link will not update if a newer version is released.`} />
+
+        {/* Flag for Deletion */}
+        {doc.flagged_for_deletion ? (
+          <button
+            onClick={handleUnflag}
+            title="This document is scheduled for deletion at 12:00 AM IST. Click to remove the flag."
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 16px', borderRadius: 8,
+              background: '#FEF2F2', color: '#DC2626',
+              border: '2px solid #DC2626',
+              cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+            }}>
+            🚩 Flagged — Click to Unflag
+          </button>
+        ) : canFlagDelete ? (
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            title="Flag this document for deletion. It will be removed at 12:00 AM IST."
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 16px', borderRadius: 8,
+              background: '#DC2626', color: '#fff', border: 'none',
+              cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+            }}>
+            🚩 Flag for Deletion
+          </button>
+        ) : (
+          <button
+            disabled
+            title={`Deletion cannot be flagged while the document is in the ${wf?.stage} stage. Return the workflow to Prepare first.`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 16px', borderRadius: 8,
+              background: '#f9fafb', color: '#9ca3af',
+              border: '1px solid #e5e7eb',
+              cursor: 'not-allowed', fontSize: 13, fontFamily: 'inherit',
+            }}>
+            🚩 Flag for Deletion
+          </button>
+        )}
       </div>
+
+      {/* Flag for Deletion confirmation modal */}
+      {showDeleteConfirm && (
+        <Modal onClose={() => !deleting && setShowDeleteConfirm(false)}>
+          <div style={{ padding: '8px 4px' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#DC2626', marginBottom: 12 }}>
+              🚩 Flag for Deletion
+            </div>
+            <p style={{ fontSize: 14, color: '#374151', marginBottom: 8 }}>
+              Flag <strong>{doc.doc_number} — {doc.title}</strong> for deletion?
+            </p>
+            <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 20 }}>
+              The document will be <strong>permanently deleted at 12:00 AM IST</strong> during the scheduled cleanup.
+              You can remove the flag before then if you change your mind.
+            </p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                style={{
+                  padding: '8px 20px', borderRadius: 8, border: '1px solid #d1d5db',
+                  background: '#fff', color: '#374151', cursor: deleting ? 'not-allowed' : 'pointer',
+                  fontSize: 13, fontFamily: 'inherit',
+                }}>
+                Cancel
+              </button>
+              <button
+                onClick={handleFlagDelete}
+                disabled={deleting}
+                style={{
+                  padding: '8px 20px', borderRadius: 8, border: 'none',
+                  background: deleting ? '#fca5a5' : '#DC2626', color: '#fff',
+                  cursor: deleting ? 'not-allowed' : 'pointer',
+                  fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                }}>
+                {deleting ? 'Flagging…' : 'Yes, Flag for Deletion'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Tabs */}
       <Tabs tabs={TABS} active={tab} onChange={setTab} />

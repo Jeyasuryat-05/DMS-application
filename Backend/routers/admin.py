@@ -5,10 +5,15 @@ Seed loads all 45 doc types from Master_Data.xlsx with full error reporting.
 import hashlib
 import traceback
 import logging
+import csv
+import io
+from datetime import datetime, date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from sqlalchemy import func, cast, Date
 from typing import List, Optional
 
 from database import get_db
@@ -535,6 +540,228 @@ try:
 except Exception as _e:
     print(f"WARNING: Could not load metadata schemas: {_e}")
     _METADATA_SCHEMAS = {}
+
+# ─── Flagged-for-Deletion Job ─────────────────────────────────────────────────
+
+def run_deletion_job(db: Session) -> dict:
+    """Hard-delete all documents flagged for deletion. Returns a summary."""
+    flagged = db.query(models.Document).filter(
+        models.Document.flagged_for_deletion == True,
+        models.Document.is_deleted == False,
+    ).all()
+    deleted_ids = []
+    for doc in flagged:
+        doc.is_deleted = True
+        doc.flagged_for_deletion = False
+        db.add(models.AuditLog(
+            document_id=doc.id,
+            user_id=doc.flagged_by_id,
+            action="Deleted by Scheduled Job",
+            note=f"Flagged at {doc.flagged_at}",
+            timestamp=datetime.utcnow(),
+        ))
+        deleted_ids.append(doc.id)
+    db.commit()
+    return {"deleted": len(deleted_ids), "document_ids": deleted_ids}
+
+
+@router.post("/run-deletion-job")
+def trigger_deletion_job(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Manually run the flagged-document deletion job (System Admin only)."""
+    result = run_deletion_job(db)
+    return {
+        "message": f"Deletion job completed. {result['deleted']} document(s) deleted.",
+        **result,
+    }
+
+
+@router.get("/flagged-documents")
+def list_flagged_documents(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """List all documents currently flagged for deletion (System Admin only)."""
+    docs = db.query(models.Document).filter(
+        models.Document.flagged_for_deletion == True,
+        models.Document.is_deleted == False,
+    ).all()
+    return [
+        {
+            "id": d.id,
+            "doc_number": d.doc_number,
+            "title": d.title,
+            "status": d.status,
+            "flagged_at": d.flagged_at.isoformat() if d.flagged_at else None,
+            "flagged_by_id": d.flagged_by_id,
+        }
+        for d in docs
+    ]
+
+
+# ─── Daily Activity Logs ──────────────────────────────────────────────────────
+
+def _ist_offset():
+    return timedelta(hours=5, minutes=30)
+
+def _audit_rows(db: Session, actions: list, date_from: Optional[str], date_to: Optional[str],
+                doc_type_id: Optional[int], extra_like: Optional[str] = None):
+    """Return AuditLog rows filtered by action, IST date range, and optional doc type."""
+    from sqlalchemy import or_ as _or
+    q = db.query(models.AuditLog).join(
+        models.Document, models.AuditLog.document_id == models.Document.id, isouter=True
+    )
+    conditions = [models.AuditLog.action.in_(actions)]
+    if extra_like:
+        conditions.append(models.AuditLog.action.ilike(extra_like))
+    q = q.filter(_or(*conditions))
+    if date_from:
+        try:
+            # Start of date_from in IST → UTC
+            start_utc = datetime.strptime(date_from, "%Y-%m-%d") - _ist_offset()
+            q = q.filter(models.AuditLog.timestamp >= start_utc)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            # End of date_to (inclusive) in IST → UTC
+            end_utc = datetime.strptime(date_to, "%Y-%m-%d") - _ist_offset() + timedelta(days=1)
+            q = q.filter(models.AuditLog.timestamp < end_utc)
+        except ValueError:
+            pass
+    if doc_type_id:
+        q = q.filter(models.Document.doc_type_id == doc_type_id)
+    return q.order_by(models.AuditLog.timestamp.desc()).all()
+
+
+def _log_to_dict(l):
+    doc = l.document
+    user = l.user
+    ist = (l.timestamp + _ist_offset()) if l.timestamp else None
+    return {
+        "id":         l.id,
+        "action":     l.action,
+        "note":       l.note,
+        "timestamp_ist": ist.strftime("%Y-%m-%d %H:%M:%S") if ist else None,
+        "user_name":  user.name if user else "System",
+        "user_email": user.email if user else "",
+        "doc_id":     doc.id if doc else None,
+        "doc_number": doc.doc_number if doc else "",
+        "doc_title":  doc.title if doc else "",
+        "doc_type":   doc.doc_type.name if doc and doc.doc_type else "",
+        "status":     doc.status if doc else "",
+        "project":    doc.project if doc else "",
+        "version":    doc.current_version if doc else "",
+    }
+
+
+def _make_csv(rows: list, filename: str) -> StreamingResponse:
+    if not rows:
+        headers_row = ["No records found"]
+        data_rows   = []
+    else:
+        headers_row = list(rows[0].keys())
+        data_rows   = [[str(r.get(h, "")) for h in headers_row] for r in rows]
+    buf = io.StringIO()
+    w   = csv.writer(buf)
+    w.writerow(headers_row)
+    w.writerows(data_rows)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+_DELETION_ACTIONS = ["Deleted by Scheduled Job", "Document Deleted", "Flagged for Deletion", "Deletion Flag Removed"]
+_CREATION_ACTIONS = ["Document Created"]  # "New Version v{n}" matched separately below
+
+
+@router.get("/logs/deletions")
+def deletion_logs(
+    date_from:   Optional[str] = Query(None, description="YYYY-MM-DD in IST (inclusive)"),
+    date_to:     Optional[str] = Query(None, description="YYYY-MM-DD in IST (inclusive)"),
+    doc_type_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    rows = _audit_rows(db, _DELETION_ACTIONS, date_from, date_to, doc_type_id)
+    return [_log_to_dict(r) for r in rows]
+
+
+@router.get("/logs/deletions/download")
+def deletion_logs_download(
+    date_from:   Optional[str] = Query(None),
+    date_to:     Optional[str] = Query(None),
+    doc_type_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    rows = _audit_rows(db, _DELETION_ACTIONS, date_from, date_to, doc_type_id)
+    dicts = [_log_to_dict(r) for r in rows]
+    label = f"{date_from or 'start'}_to_{date_to or 'end'}"
+    return _make_csv(dicts, f"deletion_log_{label}.csv")
+
+
+@router.get("/logs/creations")
+def creation_logs(
+    date_from:   Optional[str] = Query(None, description="YYYY-MM-DD in IST (inclusive)"),
+    date_to:     Optional[str] = Query(None, description="YYYY-MM-DD in IST (inclusive)"),
+    doc_type_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    rows = _audit_rows(db, _CREATION_ACTIONS, date_from, date_to, doc_type_id, extra_like="New Version v%")
+    return [_log_to_dict(r) for r in rows]
+
+
+@router.get("/logs/creations/download")
+def creation_logs_download(
+    date_from:   Optional[str] = Query(None),
+    date_to:     Optional[str] = Query(None),
+    doc_type_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    rows = _audit_rows(db, _CREATION_ACTIONS, date_from, date_to, doc_type_id, extra_like="New Version v%")
+    dicts = [_log_to_dict(r) for r in rows]
+    label = f"{date_from or 'start'}_to_{date_to or 'end'}"
+    return _make_csv(dicts, f"creation_log_{label}.csv")
+
+
+@router.get("/logs/summary")
+def logs_summary(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Daily counts for the last 30 days (IST dates) for deletions and creations."""
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    from sqlalchemy import or_ as _or
+    rows = (
+        db.query(models.AuditLog.action, models.AuditLog.timestamp)
+        .filter(models.AuditLog.timestamp >= cutoff)
+        .filter(_or(
+            models.AuditLog.action.in_(_DELETION_ACTIONS + _CREATION_ACTIONS),
+            models.AuditLog.action.ilike("New Version v%"),
+        ))
+        .all()
+    )
+    # Bucket by IST date
+    daily: dict = {}
+    for action, ts in rows:
+        if not ts:
+            continue
+        ist_date = (ts + _ist_offset()).strftime("%Y-%m-%d")
+        bucket = daily.setdefault(ist_date, {"date": ist_date, "deletions": 0, "creations": 0})
+        if action in _DELETION_ACTIONS:
+            bucket["deletions"] += 1
+        else:
+            bucket["creations"] += 1  # Document Created + New Version v*
+    return sorted(daily.values(), key=lambda x: x["date"], reverse=True)
+
 
 @router.get("/seed-metadata-schemas")
 @router.post("/seed-metadata-schemas")

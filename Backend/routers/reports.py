@@ -102,6 +102,40 @@ def by_type(
         return []
 
 
+@router.get("/by-type-status")
+def by_type_status(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Returns document count grouped by doc-type × status for stacked/grouped charts."""
+    try:
+        rows = (
+            db.query(
+                models.DocumentType.name,
+                models.Document.status,
+                func.count(models.Document.id),
+            )
+            .join(models.Document, models.Document.doc_type_id == models.DocumentType.id)
+            .filter(models.Document.is_deleted == False)
+            .group_by(models.DocumentType.name, models.Document.status)
+            .all()
+        )
+        # Pivot into [{type, Status1: n, Status2: n, ...}, ...]
+        pivot = {}
+        statuses = set()
+        for doc_type, status, count in rows:
+            statuses.add(status)
+            if doc_type not in pivot:
+                pivot[doc_type] = {"type": doc_type}
+            pivot[doc_type][status] = count
+        return {
+            "data":     list(pivot.values()),
+            "statuses": sorted(statuses),
+        }
+    except Exception:
+        return {"data": [], "statuses": []}
+
+
 @router.get("/expiring")
 def expiring_documents(
     days: int = Query(90),
@@ -135,6 +169,9 @@ def audit_report(
     action: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    doc_type_id: Optional[int] = None,
+    doc_number: Optional[str] = None,
+    user_name: Optional[str] = None,
     skip: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db),
@@ -147,6 +184,15 @@ def audit_report(
         if action:    q = q.filter(models.AuditLog.action.ilike(f"%{action}%"))
         if date_from: q = q.filter(models.AuditLog.timestamp >= datetime.fromisoformat(date_from))
         if date_to:   q = q.filter(models.AuditLog.timestamp <= datetime.fromisoformat(date_to))
+        if doc_type_id or doc_number:
+            q = q.join(models.Document, models.AuditLog.document_id == models.Document.id, isouter=True)
+            if doc_type_id:
+                q = q.filter(models.Document.doc_type_id == doc_type_id)
+            if doc_number:
+                q = q.filter(models.Document.doc_number.ilike(f"%{doc_number}%"))
+        if user_name:
+            q = q.join(models.User, models.AuditLog.user_id == models.User.id, isouter=True)
+            q = q.filter(models.User.name.ilike(f"%{user_name}%"))
 
         logs = q.order_by(models.AuditLog.timestamp.desc()).offset(skip).limit(limit).all()
         return [

@@ -3,7 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
-import uvicorn, os, traceback
+import uvicorn, os, traceback, asyncio
+from datetime import datetime, timezone, timedelta
+
+# Load .env file — no external library needed
+def _load_dotenv():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, encoding='utf-8') as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith('#') and '=' in _line:
+                _k, _v = _line.split('=', 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
+_load_dotenv()
 
 from database import engine, Base
 
@@ -12,6 +27,29 @@ try:
     Base.metadata.create_all(bind=engine)
 except Exception as e:
     print("DB create error:", e)
+
+
+def _migrate_document_columns():
+    """Add columns to documents table that were introduced after initial schema creation."""
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(
+                __import__('sqlalchemy').text("PRAGMA table_info(documents)")
+            )}
+            additions = [
+                ("flagged_for_deletion", "BOOLEAN DEFAULT 0"),
+                ("flagged_at",           "DATETIME"),
+                ("flagged_by_id",        "INTEGER"),
+            ]
+            for col, col_def in additions:
+                if col not in existing:
+                    conn.execute(__import__('sqlalchemy').text(
+                        f"ALTER TABLE documents ADD COLUMN {col} {col_def}"
+                    ))
+                    print(f"DB migration: added column documents.{col}")
+            conn.commit()
+    except Exception:
+        print("Document column migration error:", traceback.format_exc())
 
 
 def _migrate_doctype_schemas():
@@ -92,10 +130,34 @@ def _sync_document_core_fields():
         print("Core-field sync error:", traceback.format_exc())
 
 
+async def _deletion_job_scheduler():
+    """Run the flagged-document deletion job every day at 12:00 AM IST (18:30 UTC)."""
+    IST = timezone(timedelta(hours=5, minutes=30))
+    while True:
+        try:
+            now = datetime.now(IST)
+            next_midnight = (now + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            await asyncio.sleep((next_midnight - now).total_seconds())
+            from database import SessionLocal
+            from routers.admin import run_deletion_job
+            db = SessionLocal()
+            try:
+                result = run_deletion_job(db)
+                print(f"[Scheduled] Deletion job ran at {datetime.now(IST).isoformat()} IST — {result['deleted']} document(s) deleted.")
+            finally:
+                db.close()
+        except Exception:
+            print("Deletion scheduler error:", traceback.format_exc())
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _migrate_document_columns()
     _migrate_doctype_schemas()
     _sync_document_core_fields()
+    asyncio.create_task(_deletion_job_scheduler())
     yield
 
 

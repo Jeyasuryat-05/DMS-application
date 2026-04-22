@@ -78,6 +78,8 @@ export const documentsAPI = {
     params: { version }
   }),
   deleteFile:    (docId, fileId)       => api.delete(`/documents/${docId}/files/${fileId}`),
+  flagDeletion:  (id)                  => api.post(`/documents/${id}/flag-deletion`),
+  unflagDeletion:(id)                  => api.delete(`/documents/${id}/flag-deletion`),
 }
 
 // ─── Converter ───────────────────────────────────────────────────────────────
@@ -106,11 +108,12 @@ export const workflowAPI = {
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
 export const reportsAPI = {
-  summary:  ()       => api.get('/reports/summary'),
-  byStatus: ()       => api.get('/reports/by-status'),
-  byType:   ()       => api.get('/reports/by-type'),
-  expiring: (days)   => api.get('/reports/expiring', { params: { days } }),
-  audit:    (params) => api.get('/reports/audit', { params }),
+  summary:       ()       => api.get('/reports/summary'),
+  byStatus:      ()       => api.get('/reports/by-status'),
+  byType:        ()       => api.get('/reports/by-type'),
+  byTypeStatus:  ()       => api.get('/reports/by-type-status'),
+  expiring:      (days)   => api.get('/reports/expiring', { params: { days } }),
+  audit:         (params) => api.get('/reports/audit', { params }),
 }
 
 // ─── Alerts ───────────────────────────────────────────────────────────────────
@@ -136,11 +139,18 @@ export const adminAPI = {
   updateWfConfig:   (dtId, data) => api.put(`/admin/workflow-configs/${dtId}`, data),
   listRoles:        ()           => api.get('/admin/roles'),
   createRole:       (data)       => api.post('/admin/roles', data),
-  listReservations: ()           => api.get('/admin/number-reservations'),
-  reserveNumbers:   (data)       => api.post('/admin/number-reservations', data),
-  getConfig:        ()           => api.get('/admin/config'),
-  saveConfig:       (data)       => api.put('/admin/config', data),
-  seed:             ()           => api.post('/admin/seed'),
+  listReservations:   ()      => api.get('/admin/number-reservations'),
+  reserveNumbers:     (data)  => api.post('/admin/number-reservations', data),
+  getConfig:          ()      => api.get('/admin/config'),
+  saveConfig:         (data)  => api.put('/admin/config', data),
+  seed:               ()      => api.post('/admin/seed'),
+  flaggedDocuments:       ()              => api.get('/admin/flagged-documents'),
+  runDeletionJob:         ()              => api.post('/admin/run-deletion-job'),
+  logsSummary:            ()              => api.get('/admin/logs/summary'),
+  deletionLogs:           (params)        => api.get('/admin/logs/deletions', { params }),
+  creationLogs:           (params)        => api.get('/admin/logs/creations', { params }),
+  deletionLogsDownload:   (params = {})   => `/api/admin/logs/deletions/download?${new URLSearchParams(params)}`,
+  creationLogsDownload:   (params = {})   => `/api/admin/logs/creations/download?${new URLSearchParams(params)}`,
 }
 
 export default api

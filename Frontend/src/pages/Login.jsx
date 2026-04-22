@@ -16,8 +16,8 @@ export default function Login() {
   const [step, setStep]           = useState('login')
   const [code, setCode]           = useState('')
   const [gateToken, setGateToken] = useState(null)
-  const [email, setEmail]         = useState('admin@npcil.gov.in')
-  const [password, setPassword]   = useState('Admin@1234')
+  const [email, setEmail]         = useState('')
+  const [password, setPassword]   = useState('')
   const [error, setError]         = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [seeding, setSeeding]     = useState(false)
@@ -103,7 +103,7 @@ export default function Login() {
 
         {/* Auth Code Gate */}
         {step === 'code' && (
-          <form onSubmit={handleCodeSubmit}>
+          <form onSubmit={handleCodeSubmit} autoComplete="off">
             <div style={{
               background: '#f0f7ff', border: '1px solid #bfdbfe',
               borderRadius: 10, padding: '12px 14px', marginBottom: 16,
@@ -119,6 +119,9 @@ export default function Login() {
                 type="password" value={code}
                 onChange={e => setCode(e.target.value)}
                 placeholder="Enter access code…" required autoFocus
+                autoComplete="off"
+                readOnly
+                onFocus={e => e.currentTarget.removeAttribute('readOnly')}
                 style={{ width: '100%', boxSizing: 'border-box' }}
               />
             </div>
@@ -161,7 +164,7 @@ export default function Login() {
               </button>
             )}
 
-            <form onSubmit={handleLogin}>
+            <form onSubmit={handleLogin} autoComplete="off">
               <div style={{ marginBottom: 14 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
                   Email
@@ -170,6 +173,9 @@ export default function Login() {
                   type="email" value={email}
                   onChange={e => setEmail(e.target.value)}
                   style={{ width: '100%', boxSizing: 'border-box' }}
+                  autoComplete="off"
+                  readOnly
+                  onFocus={e => e.currentTarget.removeAttribute('readOnly')}
                   required autoFocus
                 />
               </div>
@@ -181,6 +187,9 @@ export default function Login() {
                   type="password" value={password}
                   onChange={e => setPassword(e.target.value)}
                   style={{ width: '100%', boxSizing: 'border-box' }}
+                  autoComplete="off"
+                  readOnly
+                  onFocus={e => e.currentTarget.removeAttribute('readOnly')}
                   required
                 />
               </div>
