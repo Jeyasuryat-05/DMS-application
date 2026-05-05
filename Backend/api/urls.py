@@ -1,0 +1,91 @@
+from django.urls import path
+from api.views import auth_views, document_views, workflow_views, report_views, admin_views, alert_views, converter_views
+
+urlpatterns = [
+    # ── Health ────────────────────────────────────────────────────────────────
+    path('health', auth_views.health),
+    path('test', auth_views.test_endpoint),
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    path('auth/config', auth_views.auth_config),
+    path('auth/login', auth_views.login),
+    path('auth/register', auth_views.register),
+    path('auth/me', auth_views.me),
+    path('auth/verify-code', auth_views.verify_auth_code),
+    path('auth/profile/picture', auth_views.profile_picture),
+    path('auth/sso/login', auth_views.sso_login),
+    path('auth/sso/callback', auth_views.sso_callback),
+    path('auth/sso/metadata', auth_views.sso_metadata),
+
+    # ── Documents ─────────────────────────────────────────────────────────────
+    path('documents/', document_views.list_create_documents),
+    path('documents/<int:doc_id>', document_views.get_update_delete_document),
+    path('documents/<int:doc_id>/checkout', document_views.checkout),
+    path('documents/<int:doc_id>/feedback', document_views.add_feedback),
+    path('documents/<int:doc_id>/references', document_views.add_reference),
+    path('documents/<int:doc_id>/share-link', document_views.share_link),
+    path('documents/<int:doc_id>/versions', document_views.upload_version),
+    path('documents/<int:doc_id>/files', document_views.add_file),
+    path('documents/<int:doc_id>/files/<int:file_id>/download', document_views.download_file),
+    path('documents/<int:doc_id>/files/<int:file_id>/view', document_views.view_file),
+    path('documents/<int:doc_id>/files/<int:file_id>', document_views.delete_file),
+    path('documents/<int:doc_id>/flag-deletion', document_views.flag_deletion),
+    path('documents/<int:doc_id>/unflag-deletion', document_views.unflag_deletion),
+    path('documents/<int:doc_id>/file-access-stats', document_views.file_access_stats),
+
+    # ── Workflow ──────────────────────────────────────────────────────────────
+    path('workflow/inbox', workflow_views.my_inbox),
+    path('workflow/pending', workflow_views.all_pending),
+    path('workflow/<int:doc_id>/initiate', workflow_views.initiate_workflow),
+    path('workflow/<int:doc_id>/action', workflow_views.workflow_action),
+    path('workflow/<int:doc_id>/checklist', workflow_views.complete_checklist),
+    path('workflow/<int:doc_id>/return', workflow_views.return_document),
+    path('workflow/<int:doc_id>/assign', workflow_views.assign_user),
+    path('workflow/<int:doc_id>/status', workflow_views.workflow_status),
+    path('workflow/<int:doc_id>/submit', workflow_views.submit_document),
+    path('workflow/<int:doc_id>/checklist-template/<int:level_id>', workflow_views.checklist_template),
+    path('workflow/<int:doc_id>/checklist-template/<int:level_id>/download', workflow_views.download_checklist_template),
+    path('workflow/<int:doc_id>/checklist-submit/<int:task_id>', workflow_views.submit_completed_checklist),
+    path('workflow/<int:doc_id>/checklist-submit/<int:task_id>/download', workflow_views.download_completed_checklist),
+    path('workflow/<int:doc_id>/history-checklist/download', workflow_views.download_history_checklist),
+
+    # ── Reports ───────────────────────────────────────────────────────────────
+    path('reports/summary', report_views.summary),
+    path('reports/by-status', report_views.by_status),
+    path('reports/by-type', report_views.by_type),
+    path('reports/by-type-status', report_views.by_type_status),
+    path('reports/expiring', report_views.expiring),
+    path('reports/audit', report_views.audit),
+
+    # ── Admin ─────────────────────────────────────────────────────────────────
+    path('admin/config', admin_views.system_config),
+    path('admin/users', admin_views.users),
+    path('admin/users/<int:user_id>', admin_views.user_detail),
+    path('admin/users/<int:user_id>/activate', admin_views.activate_user),
+    path('admin/document-types', admin_views.document_types),
+    path('admin/document-types/<int:dt_id>', admin_views.document_type_detail),
+    path('admin/workflow-configs', admin_views.workflow_configs),
+    path('admin/workflow-configs/<int:doc_type_id>', admin_views.workflow_config_detail),
+    path('admin/roles', admin_views.roles),
+    path('admin/number-reservations', admin_views.number_reservations),
+    path('admin/seed', admin_views.seed_data),
+    path('admin/seed-metadata-schemas', admin_views.seed_metadata_schemas),
+    path('admin/fix-checklist-required', admin_views.fix_checklist_required),
+    path('admin/run-deletion-job', admin_views.run_deletion_job),
+    path('admin/flagged-documents', admin_views.flagged_documents),
+    path('admin/logs/deletions', admin_views.deletion_logs),
+    path('admin/logs/deletions/download', admin_views.deletion_logs_download),
+    path('admin/logs/creations', admin_views.creation_logs),
+    path('admin/logs/creations/download', admin_views.creation_logs_download),
+    path('admin/logs/summary', admin_views.logs_summary),
+
+    # ── Alerts ────────────────────────────────────────────────────────────────
+    path('alerts/run-job', alert_views.trigger_alert_job),
+    path('alerts/logs', alert_views.get_alert_logs),
+    path('alerts/config', alert_views.get_alert_configs),
+    path('alerts/config/<int:doc_type_id>', alert_views.update_alert_config),
+    path('alerts/upcoming', alert_views.upcoming_expirations),
+
+    # ── Converter ─────────────────────────────────────────────────────────────
+    path('convert/files/<int:file_id>/pdf', converter_views.get_as_pdf),
+]

@@ -41,7 +41,7 @@ export function AuthProvider({ children }) {
 
       return { ok: true }
     } catch (e) {
-      const msg = e.response?.data?.detail || 'Login failed. Check your email and password.'
+      const msg = e.response?.data?.error || e.response?.data?.detail || 'Login failed. Check your credentials.'
       return { ok: false, error: msg }
     }
   }
