@@ -57,6 +57,7 @@ class DocumentType(models.Model):
     number_pattern  = models.CharField(max_length=200, default='{CODE}-{YEAR}-{SEQ}')
     is_active       = models.BooleanField(default=True)
     created_at      = models.DateTimeField(auto_now_add=True)
+    parent          = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='children', db_column='parent_id')
 
     class Meta:
         db_table = 'document_types'

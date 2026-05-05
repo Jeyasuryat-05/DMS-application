@@ -10,7 +10,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { adminAPI, authAPI } from '../api'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { fmtDate, fmtDateTime } from '../utils/dates'
 
 // ─── palette ──────────────────────────────────────────────────────────────────
@@ -1466,7 +1466,8 @@ const TABS = [
 ]
 
 export default function Admin() {
-  const [tab, setTab]   = useState('users')
+  const location = useLocation()
+  const [tab, setTab]   = useState(location.state?.tab || 'users')
   const [toast, showToast] = useToast()
 
   return (

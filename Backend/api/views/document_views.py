@@ -1,5 +1,6 @@
 import os, uuid, json, traceback, mimetypes
 from datetime import datetime, timedelta
+from django.utils import timezone
 from django.http import FileResponse, HttpResponse
 from django.db import transaction
 from django.db.models import Q
@@ -42,7 +43,15 @@ except Exception:
 
 
 def _iso(dt):
-    return dt.isoformat() + 'Z' if dt else None
+    if not dt:
+        return None
+    s = dt.isoformat()
+    # USE_TZ=True makes isoformat() return "+00:00" suffix; replace with Z for JS compatibility
+    if s.endswith('+00:00'):
+        return s[:-6] + 'Z'
+    if not s.endswith('Z'):
+        s += 'Z'
+    return s
 
 
 def _doc_to_dict(d):
@@ -106,6 +115,8 @@ def _doc_to_dict(d):
             'status_code': d.status_code or '05',
             'confidential': bool(d.confidential),
             'checked_out': bool(d.checked_out),
+            'checked_out_by_id': d.checked_out_by_id,
+            'checked_out_at': _iso(d.checked_out_at),
             'created_at': _iso(d.created_at),
             'updated_at': _iso(d.updated_at),
             'expiry_date': _iso(d.expiry_date),
@@ -289,10 +300,18 @@ def _get_document(request, doc_id):
             return Response({'error': 'Document not found'}, status=404)
 
         try:
-            AuditLog.objects.create(
-                document_id=doc.id, user_id=request.user.id,
-                action='Document Viewed', note='',
-            )
+            cooldown = timezone.now() - timedelta(minutes=5)
+            already_logged = AuditLog.objects.filter(
+                document_id=doc.id,
+                user_id=request.user.id,
+                action='Document Viewed',
+                timestamp__gte=cooldown,
+            ).exists()
+            if not already_logged:
+                AuditLog.objects.create(
+                    document_id=doc.id, user_id=request.user.id,
+                    action='Document Viewed', note='',
+                )
         except Exception:
             pass
 
@@ -300,6 +319,10 @@ def _get_document(request, doc_id):
         base['creator'] = (
             {'id': doc.creator.id, 'name': doc.creator.name, 'email': doc.creator.email}
             if doc.creator else None
+        )
+        base['checked_out_by'] = (
+            {'id': doc.checked_out_by.id, 'name': doc.checked_out_by.name}
+            if doc.checked_out_by_id else None
         )
         base['versions'] = [
             {
@@ -422,12 +445,28 @@ def _update_document(request, doc_id):
             return Response({'error': 'Cannot modify Approved, Released or Archived documents.'}, status=403)
         if doc.status in ('In Check', 'In Review', 'In Approval'):
             return Response({'error': f'Document is locked for editing — currently under review (status: {doc.status}). Return the workflow to make changes.'}, status=403)
+        if doc.checked_out and doc.checked_out_by_id != request.user.id:
+            try:
+                owner = User.objects.get(id=doc.checked_out_by_id)
+                owner_name = owner.name
+            except Exception:
+                owner_name = f'user {doc.checked_out_by_id}'
+            return Response({'error': f'Document is checked out by {owner_name}. Only they can make changes while it is checked out.'}, status=403)
 
         data = request.data
         DATE_FIELDS = {'expiry_date', 'renewal_date', 'revision_due'}
         SKIP_FIELDS = {'id', 'doc_number', 'creator_id', 'status', 'current_version'}
 
         old_cm = dict(doc.custom_metadata or {})
+
+        # Snapshot core fields that can be set via metadata keys, BEFORE any modifications
+        old_core_values = {
+            'usi':          doc.usi_kks_code,
+            'usi_kks_code': doc.usi_kks_code,
+            'project':      doc.project,
+            'expiry_date':  doc.expiry_date,
+            'revision_due': doc.revision_due,
+        }
 
         _raw_cm = data.get('custom_metadata') or {}
         if isinstance(_raw_cm, str):
@@ -506,7 +545,11 @@ def _update_document(request, doc_id):
             update_fields.append('custom_metadata')
 
         for mk, new_v in incoming_cm.items():
-            old_v = old_cm.get(mk)
+            # For keys that map to core fields, use the pre-change core value, not custom_metadata
+            if mk in old_core_values:
+                old_v = old_core_values[mk]
+            else:
+                old_v = old_cm.get(mk)
             o, n = _s(old_v), _s(new_v)
             if o != n:
                 label = mk.replace('_', ' ').title()
@@ -768,6 +811,14 @@ def add_file(request, doc_id):
     if doc.status not in ('Draft', 'Created'):
         return Response({'error': f'Files can only be added when the document is in Draft or Created status. Current status is \'{doc.status}\'.'}, status=403)
 
+    if doc.checked_out and doc.checked_out_by_id != request.user.id:
+        try:
+            owner = User.objects.get(id=doc.checked_out_by_id)
+            owner_name = owner.name
+        except Exception:
+            owner_name = f'user {doc.checked_out_by_id}'
+        return Response({'error': f'Document is checked out by {owner_name}. Only they can upload files while it is checked out.'}, status=403)
+
     try:
         wf = doc.workflow
         if not wf.completed and wf.stage in ('Check', 'Review', 'Approve'):
@@ -813,6 +864,14 @@ def delete_file(request, doc_id, file_id):
 
     if doc.status not in ('Draft', 'Created'):
         return Response({'error': f'Files can only be deleted when the document is in Draft or Created status. Current status is \'{doc.status}\'.'}, status=403)
+
+    if doc.checked_out and doc.checked_out_by_id != request.user.id:
+        try:
+            owner = User.objects.get(id=doc.checked_out_by_id)
+            owner_name = owner.name
+        except Exception:
+            owner_name = f'user {doc.checked_out_by_id}'
+        return Response({'error': f'Document is checked out by {owner_name}. Only they can delete files while it is checked out.'}, status=403)
 
     try:
         wf = doc.workflow

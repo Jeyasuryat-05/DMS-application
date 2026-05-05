@@ -1,5 +1,5 @@
 from django.urls import path
-from api.views import auth_views, document_views, workflow_views, report_views, admin_views, alert_views, converter_views
+from api.views import auth_views, document_views, workflow_views, report_views, admin_views, alert_views, converter_views, library_views
 
 urlpatterns = [
     # ── Health ────────────────────────────────────────────────────────────────
@@ -88,4 +88,10 @@ urlpatterns = [
 
     # ── Converter ─────────────────────────────────────────────────────────────
     path('convert/files/<int:file_id>/pdf', converter_views.get_as_pdf),
+
+    # ── Document Library ──────────────────────────────────────────────────────
+    path('library/tree', library_views.folder_tree),
+    path('library/folders', library_views.folders),
+    path('library/folders/<int:folder_id>', library_views.folder_detail),
+    path('library/folders/<int:folder_id>/documents', library_views.folder_documents),
 ]

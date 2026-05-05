@@ -3,14 +3,18 @@ const TZ = 'Asia/Kolkata'
 export function fmtDate(v, opts = {}) {
   if (!v) return '—'
   try {
-    return new Date(v).toLocaleDateString('en-IN', { timeZone: TZ, ...opts })
+    const d = new Date(v)
+    if (isNaN(d.getTime())) return '—'
+    return d.toLocaleDateString('en-IN', { timeZone: TZ, ...opts })
   } catch { return '—' }
 }
 
 export function fmtDateTime(v) {
   if (!v) return '—'
   try {
-    return new Date(v).toLocaleString('en-IN', { timeZone: TZ })
+    const d = new Date(v)
+    if (isNaN(d.getTime())) return '—'
+    return d.toLocaleString('en-IN', { timeZone: TZ })
   } catch { return '—' }
 }
 

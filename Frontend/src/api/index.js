@@ -157,4 +157,15 @@ export const adminAPI = {
   creationLogsDownload:   (params = {})   => `/api/admin/logs/creations/download?${new URLSearchParams(params)}`,
 }
 
+// ─── Document Library ─────────────────────────────────────────────────────────
+export const libraryAPI = {
+  tree:              ()           => api.get('/library/tree'),
+  folders:           (params)     => api.get('/library/folders', { params }),
+  createFolder:      (data)       => api.post('/library/folders', data),
+  getFolder:         (id)         => api.get(`/library/folders/${id}`),
+  updateFolder:      (id, data)   => api.put(`/library/folders/${id}`, data),
+  deleteFolder:      (id)         => api.delete(`/library/folders/${id}`),
+  folderDocuments:   (id)         => api.get(`/library/folders/${id}/documents`),
+}
+
 export default api

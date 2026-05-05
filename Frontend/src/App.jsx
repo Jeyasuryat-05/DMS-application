@@ -9,6 +9,7 @@ import DocumentDetail from './pages/DocumentDetail'
 import Workflow from './pages/Workflow'
 import Reports from './pages/Reports'
 import Admin from './pages/Admin'
+import DocumentLibrary from './pages/DocumentLibrary'
 
 function IdleWarning({ countdown, onStay }) {
   return (
@@ -78,6 +79,7 @@ function App() {
             <Route index element={<Dashboard />} />
             <Route path="documents" element={<Documents />} />
             <Route path="documents/:id" element={<DocumentDetail />} />
+            <Route path="library" element={<DocumentLibrary />} />
             <Route path="workflow" element={<Workflow />} />
             <Route path="reports" element={<Reports />} />
             <Route path="admin" element={<Admin />} />

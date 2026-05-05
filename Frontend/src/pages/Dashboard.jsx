@@ -641,7 +641,7 @@ function RecentList({ items, nav }) {
         </div>
       </div>
       <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
-        {doc.workflow && !doc.workflow.completed && <Badge label={doc.workflow.stage} />}
+        {doc.workflow && !doc.workflow.completed && doc.workflow.stage !== 'Prepare' && <Badge label={doc.workflow.stage} />}
         <Badge label={doc.status} />
       </div>
     </div>

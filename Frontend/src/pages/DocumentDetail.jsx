@@ -197,6 +197,7 @@ export default function DocumentDetail() {
   }
 
   function openMetaEdit() {
+    if (isCheckedOutByOther) return
     const cm = { ...(doc.custom_metadata || {}) }
     const schemaFields = Array.isArray(doc.doc_type?.metadata_schema) ? doc.doc_type.metadata_schema : []
 
@@ -421,11 +422,15 @@ export default function DocumentDetail() {
 
   const LOCKED_STATUSES = ['In Check','In Review','In Approval','Approved','Released','Archived']
 
-  // Can edit metadata in Draft or Created (preparation stage), not during formal review
-  const canEdit    = !LOCKED_STATUSES.includes(doc.status)
+  // Checkout ownership
+  const isCheckedOutByMe = doc.checked_out && doc.checked_out_by?.id === user?.id
+  const isCheckedOutByOther = doc.checked_out && !isCheckedOutByMe
 
-  // Can upload files only in Draft or Created, no active workflow
-  const canUploadFile = (doc.status === 'Draft' || doc.status === 'Created') && !wfActive
+  // Can edit metadata in Draft or Created (preparation stage), not during formal review, not locked by someone else
+  const canEdit    = !LOCKED_STATUSES.includes(doc.status) && !isCheckedOutByOther
+
+  // Can upload files only in Draft or Created, no active workflow, not locked by someone else
+  const canUploadFile = (doc.status === 'Draft' || doc.status === 'Created') && !wfActive && !isCheckedOutByOther
 
   // Can create new version ONLY if currently Released
   const canNewVersion = doc.status === 'Released' && !wfActive
@@ -502,8 +507,10 @@ export default function DocumentDetail() {
 
       {/* Checked out notice */}
       {doc.checked_out && (
-        <div style={{ background: '#FAEEDA', border: '1px solid #EF9F27', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 13, color: '#854F0B' }}>
-          🔒 This document is currently checked out (User ID: {doc.checked_out_by})
+        <div style={{ background: isCheckedOutByMe ? '#E6F1FB' : '#FAEEDA', border: `1px solid ${isCheckedOutByMe ? '#185FA5' : '#EF9F27'}`, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 13, color: isCheckedOutByMe ? '#0C447C' : '#854F0B' }}>
+          🔒 {isCheckedOutByMe
+            ? 'You have this document checked out. Check it in when you are done editing.'
+            : `This document is checked out by ${doc.checked_out_by?.name || 'another user'}. Editing is disabled until they check it back in.`}
         </div>
       )}
 
@@ -535,7 +542,7 @@ export default function DocumentDetail() {
           <Btn label="Check Out" onClick={() => handleCheckout('checkout')} icon="🔒"
             title="Lock this document to signal you are actively editing it — other users will see a 'Checked Out' warning and know not to make changes simultaneously." />
         )}
-        {doc.checked_out && (
+        {isCheckedOutByMe && (
           <Btn label="Check In" onClick={() => handleCheckout('checkin')} variant="warning" icon="🔓"
             title="Release the document lock — marks your editing session as complete and makes the document available for others to work on." />
         )}
@@ -689,8 +696,8 @@ export default function DocumentDetail() {
             {/* ── READ-ONLY view ── */}
             {!metaEditMode && (
               <div>
-                {/* Pencil button — only during preparation stage */}
-                {inPrep && (
+                {/* Pencil button — only during preparation stage and when not locked by another user */}
+                {inPrep && canEdit && (
                   <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
                     <button
                       onClick={openMetaEdit}
@@ -1250,15 +1257,23 @@ export default function DocumentDetail() {
                     {e.note && <div style={{ fontSize: 12, color: '#374151', marginTop: 2, background: '#f9fafb', padding: '4px 8px', borderRadius: 4 }}>{e.note}</div>}
                     {e.old_value && Object.keys(e.old_value).length > 0 && (
                       <div style={{ fontSize: 11, marginTop: 4, background: '#f9fafb', padding: '5px 8px', borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {Object.entries(e.old_value).map(([k, oldVal]) => (
-                          <div key={k}>
-                            <span style={{ color: '#6b7280', fontWeight: 600 }}>{k}:</span>
-                            {' '}
-                            <span style={{ color: '#A32D2D' }}>{oldVal ?? '—'}</span>
-                            {' → '}
-                            <span style={{ color: '#0F6E56' }}>{e.new_value?.[k] ?? '—'}</span>
-                          </div>
-                        ))}
+                        {Object.entries(e.old_value).map(([k, oldVal]) => {
+                          const newVal = e.new_value?.[k]
+                          const emptyStyle = { color: '#9ca3af', fontStyle: 'italic', fontSize: 10 }
+                          return (
+                            <div key={k}>
+                              <span style={{ color: '#6b7280', fontWeight: 600 }}>{k}:</span>
+                              {' '}
+                              {oldVal != null && oldVal !== ''
+                                ? <span style={{ color: '#A32D2D' }}>{oldVal}</span>
+                                : <span style={emptyStyle}>(empty)</span>}
+                              {' → '}
+                              {newVal != null && newVal !== ''
+                                ? <span style={{ color: '#0F6E56' }}>{newVal}</span>
+                                : <span style={emptyStyle}>(empty)</span>}
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
                   </div>

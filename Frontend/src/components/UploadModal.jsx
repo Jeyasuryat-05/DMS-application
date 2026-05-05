@@ -2,11 +2,11 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { documentsAPI, adminAPI } from '../api'
 import { Modal, Input, Select, Btn, SearchableSelect } from './ui'
 
-export default function UploadModal({ onClose, onSuccess }) {
+export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }) {
   const [docTypes, setDocTypes]   = useState([])
   const [selDocType, setSelDocType] = useState(null)  // full doc type object
   const [form, setForm] = useState({
-    title: '', doc_type_id: '', confidential: false,
+    title: '', doc_type_id: preselectedDocTypeId ? String(preselectedDocTypeId) : '', confidential: false,
     change_reason: 'Initial upload',
   })
   const [customMeta, setCustomMeta] = useState({})   // key → value for dynamic fields

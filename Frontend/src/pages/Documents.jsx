@@ -84,7 +84,7 @@ export default function Documents() {
     },
     {
       key: 'workflow', label: 'Stage',
-      render: (v) => v && !v.completed ? <Badge label={v.stage} /> : v?.completed ? <Badge label="Completed" /> : '—'
+      render: (v) => v?.completed ? <Badge label="Completed" /> : (v && v.stage && v.stage !== 'Prepare') ? <Badge label={v.stage} /> : '—'
     },
     {
       key: 'expiry_date', label: 'Expiry',

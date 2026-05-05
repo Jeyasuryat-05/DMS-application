@@ -6,6 +6,7 @@ import { workflowAPI, authAPI } from '../api'
 const NAV = [
   { to: '/',          icon: '🏠', label: 'Dashboard' },
   { to: '/documents', icon: '📄', label: 'Documents' },
+  { to: '/library',   icon: '📚', label: 'Document Library' },
   { to: '/workflow',  icon: '🔄', label: 'Workflow' },
   { to: '/reports',   icon: '📊', label: 'Reports' },
   { to: '/admin',     icon: '⚙️', label: 'Administration' },
