@@ -62,6 +62,15 @@ function RequireAuth({ children }) {
   )
 }
 
+function RequireRole({ roles, children }) {
+  let user = null
+  try { user = JSON.parse(localStorage.getItem('dms_user') || 'null') } catch {}
+  if (!user || !roles.includes(user.role)) {
+    return <Navigate to="/" replace />
+  }
+  return children
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -82,7 +91,11 @@ function App() {
             <Route path="library" element={<DocumentLibrary />} />
             <Route path="workflow" element={<Workflow />} />
             <Route path="reports" element={<Reports />} />
-            <Route path="admin" element={<Admin />} />
+            <Route path="admin" element={
+              <RequireRole roles={['System Admin', 'Sub Admin']}>
+                <Admin />
+              </RequireRole>
+            } />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

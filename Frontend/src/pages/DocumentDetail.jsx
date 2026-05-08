@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import WorkflowInitModal from '../components/WorkflowInitModal'
 import FileViewer from '../components/FileViewer'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { documentsAPI, workflowAPI, adminAPI } from '../api'
 import { useAuth } from '../hooks/useAuth'
 import { fmtDate, fmtDateTime } from '../utils/dates'
@@ -56,10 +56,266 @@ function MetaField({ field, val, setVal, locked }) {
         style={{ ...baseInp, resize: 'vertical', fontFamily: 'inherit' }} />
     </div>
   )
+  // Char / Numeric — length-constrained input.
+  if (field.type === 'char' || field.type === 'numeric') {
+    const isNumeric = field.type === 'numeric'
+    const fixed = field.length || null
+    const maxL  = fixed || field.max_length || null
+    const handleChange = (raw) => {
+      let v = String(raw)
+      if (isNumeric) v = v.replace(/\D/g, '')
+      if (maxL) v = v.slice(0, maxL)
+      setVal(v)
+    }
+    let invalid = false
+    if (val) {
+      if (fixed && val.length !== fixed) invalid = true
+      else if (!fixed && field.min_length && val.length < field.min_length) invalid = true
+    }
+    const hint = fixed ? `Exactly ${fixed} ${isNumeric ? 'digits' : 'chars'}` :
+                 (field.min_length || field.max_length) ?
+                   `Length ${field.min_length || 0}–${field.max_length || '∞'}` :
+                 (isNumeric ? 'Digits only' : 'Letters / digits')
+    return (
+      <div>
+        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>
+          {field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}
+          <span style={{ marginLeft: 8, fontSize: 10, color: '#9ca3af' }}>{hint}</span>
+        </div>
+        <input
+          value={val}
+          onChange={e => handleChange(e.target.value)}
+          inputMode={isNumeric ? 'numeric' : undefined}
+          maxLength={maxL || undefined}
+          placeholder={fixed ? (isNumeric ? '1'.repeat(fixed) : 'X'.repeat(fixed)) : undefined}
+          style={{ ...baseInp, borderColor: invalid ? '#A32D2D' : undefined }}
+        />
+        {invalid && (
+          <div style={{ fontSize: 10, color: '#A32D2D', marginTop: 2 }}>
+            {fixed ? `Must be exactly ${fixed} ${isNumeric ? 'digits' : 'characters'}.` :
+              `Must be at least ${field.min_length} characters.`}
+          </div>
+        )}
+      </div>
+    )
+  }
+  // Legacy USI fallback when the schema still has type='text' and key='usi'.
+  const isUsi = (field.key || '').toLowerCase() === 'usi' ||
+                (field.key || '').toLowerCase() === 'usi_kks_code'
+  const usiInvalid = isUsi && val && !/^\d{5}$/.test(String(val))
   return (
     <div>
-      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}</div>
-      <input value={val} onChange={e => setVal(e.target.value)} style={baseInp} />
+      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>
+        {field.label}{field.required && <span style={{ color: '#A32D2D' }}> *</span>}
+        {isUsi && <span style={{ marginLeft: 8, fontSize: 10, color: '#9ca3af' }}>5 digits, numeric only</span>}
+      </div>
+      <input
+        value={val}
+        onChange={e => setVal(isUsi ? e.target.value.replace(/\D/g, '').slice(0, 5) : e.target.value)}
+        inputMode={isUsi ? 'numeric' : undefined}
+        pattern={isUsi ? '\\d{5}' : undefined}
+        maxLength={isUsi ? 5 : undefined}
+        placeholder={isUsi ? '12345' : undefined}
+        style={{ ...baseInp, borderColor: usiInvalid ? '#A32D2D' : undefined }}
+      />
+      {usiInvalid && (
+        <div style={{ fontSize: 10, color: '#A32D2D', marginTop: 2 }}>USI must be exactly 5 digits.</div>
+      )}
+    </div>
+  )
+}
+
+/* ─── Admin Workflow Recovery Panel ──────────────────────────────────────── */
+function AdminWorkflowRecovery({ docId, wf, users, onDone }) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [resetNote, setResetNote] = useState('')
+  const [reassignUid, setReassignUid] = useState('')
+
+  async function doReset() {
+    if (!window.confirm('Force-reset this workflow? The document will go back to Draft status and the workflow must be re-initiated.')) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await workflowAPI.adminForceReset(docId, resetNote || 'Admin force-reset')
+      setMsg('✅ ' + r.data.message)
+      setTimeout(() => { setMsg(''); onDone() }, 1500)
+    } catch (e) { setMsg('❌ ' + (e.response?.data?.error || 'Failed')) }
+    finally { setBusy(false) }
+  }
+
+  async function doReassign() {
+    if (!reassignUid) { setMsg('❌ Select a user first'); return }
+    setBusy(true); setMsg('')
+    try {
+      const r = await workflowAPI.adminReassign(docId, parseInt(reassignUid))
+      setMsg('✅ ' + r.data.message)
+      setTimeout(() => { setMsg(''); onDone() }, 1500)
+    } catch (e) { setMsg('❌ ' + (e.response?.data?.error || 'Failed')) }
+    finally { setBusy(false) }
+  }
+
+  async function doFixStatus() {
+    setBusy(true); setMsg('')
+    try {
+      const r = await workflowAPI.adminFixStatus(docId)
+      setMsg('✅ ' + r.data.message)
+      setTimeout(() => { setMsg(''); onDone() }, 1500)
+    } catch (e) { setMsg('❌ ' + (e.response?.data?.error || 'Failed')) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ marginTop: 24, border: '1.5px dashed #fbbf24', borderRadius: 10, overflow: 'hidden' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', padding: '10px 16px', background: '#fffbeb', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left' }}
+      >
+        <span style={{ fontSize: 15 }}>🔧</span>
+        <span style={{ fontWeight: 700, fontSize: 13, color: '#92400e' }}>Admin: Workflow Recovery Tools</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: '#b45309' }}>{open ? '▲ Hide' : '▼ Show'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '16px 20px', background: '#fffbeb', borderTop: '1px solid #fde68a', display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {msg && (
+            <div style={{ padding: '8px 14px', borderRadius: 7, background: msg.startsWith('✅') ? '#f0fdf4' : '#fef2f2', fontSize: 13, fontWeight: 600, color: msg.startsWith('✅') ? '#166534' : '#991b1b' }}>
+              {msg}
+            </div>
+          )}
+
+          {/* Reassign current step */}
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: '#78350f', marginBottom: 6 }}>
+              Re-assign Step {wf.current_step}
+            </div>
+            <div style={{ fontSize: 12, color: '#92400e', marginBottom: 10 }}>
+              Replace all pending tasks at the current step with a new assignee. Use when the original assignee is unavailable.
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <select
+                value={reassignUid}
+                onChange={e => setReassignUid(e.target.value)}
+                style={{ flex: 1, padding: '7px 10px', border: '1px solid #fde68a', borderRadius: 7, fontSize: 13, background: '#fff' }}
+              >
+                <option value="">— Select new assignee —</option>
+                {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role || u.email})</option>)}
+              </select>
+              <button onClick={doReassign} disabled={busy}
+                style={{ padding: '7px 18px', background: '#d97706', color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1 }}>
+                Re-assign
+              </button>
+            </div>
+          </div>
+
+          {/* Fix status */}
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: '#78350f', marginBottom: 6 }}>Fix Document Status</div>
+            <div style={{ fontSize: 12, color: '#92400e', marginBottom: 10 }}>
+              Re-syncs the document status with the current workflow stage. Use when the status label is wrong but the workflow data is intact.
+            </div>
+            <button onClick={doFixStatus} disabled={busy}
+              style={{ padding: '7px 18px', background: '#0c447c', color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1 }}>
+              Sync Status
+            </button>
+          </div>
+
+          {/* Force reset */}
+          <div style={{ borderTop: '1px solid #fde68a', paddingTop: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: '#991b1b', marginBottom: 6 }}>⚠ Force Reset Workflow</div>
+            <div style={{ fontSize: 12, color: '#7c2d12', marginBottom: 10 }}>
+              Nuclear option — deletes the entire workflow and returns the document to Draft status. Use only when nothing else works. A snapshot is saved for audit history.
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                value={resetNote}
+                onChange={e => setResetNote(e.target.value)}
+                placeholder="Reason for reset (required for audit)"
+                style={{ flex: 1, padding: '7px 10px', border: '1px solid #fca5a5', borderRadius: 7, fontSize: 13 }}
+              />
+              <button onClick={doReset} disabled={busy}
+                style={{ padding: '7px 18px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1, whiteSpace: 'nowrap' }}>
+                Force Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ─── Admin Reassign Doc Number ──────────────────────────────────────────── */
+function AdminReassignDocNumber({ doc, onDone }) {
+  const [open, setOpen]       = useState(false)
+  const [project, setProject] = useState(doc.project || '')
+  const [usi, setUsi]         = useState(doc.usi_kks_code || '')
+  const [busy, setBusy]       = useState(false)
+  const [msg, setMsg]         = useState('')
+
+  useEffect(() => {
+    setProject(doc.project || '')
+    setUsi(doc.usi_kks_code || '')
+  }, [doc.id])
+
+  async function doReassign() {
+    if (!project.trim() || !usi.trim()) { setMsg('❌ Project and USI are required'); return }
+    if (!window.confirm(`Reassign document number?\n\nProject: ${project}\nUSI: ${usi}\n\nThis will generate a new doc number and cannot be undone.`)) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await documentsAPI.reassignDocNumber(doc.id, project.trim(), usi.trim())
+      setMsg('✅ ' + r.data.message + ' → ' + r.data.doc_number)
+      setTimeout(() => { setMsg(''); setOpen(false); onDone() }, 2000)
+    } catch(e) { setMsg('❌ ' + (e.response?.data?.error || 'Failed')) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ marginTop: 12, border: '1.5px dashed #7c3aed', borderRadius: 10, overflow: 'hidden' }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', padding: '10px 16px', background: '#f5f3ff', border: 'none', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left' }}>
+        <span style={{ fontSize: 15 }}>🔢</span>
+        <span style={{ fontWeight: 700, fontSize: 13, color: '#5b21b6' }}>Admin: Reassign Document Number</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: '#7c3aed' }}>{open ? '▲ Hide' : '▼ Show'}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '16px 20px', background: '#f5f3ff', borderTop: '1px solid #ddd6fe' }}>
+          <div style={{ fontSize: 12, color: '#5b21b6', marginBottom: 14 }}>
+            Change the <strong>Project</strong> and/or <strong>USI</strong> that form the document number.
+            A new doc number will be generated and the old one is logged in Audit.
+          </div>
+          {msg && (
+            <div style={{ padding: '8px 14px', borderRadius: 7, marginBottom: 12,
+              background: msg.startsWith('✅') ? '#f0fdf4' : '#fef2f2',
+              color: msg.startsWith('✅') ? '#166534' : '#991b1b', fontSize: 13, fontWeight: 600 }}>
+              {msg}
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Project Code</div>
+              <input value={project} onChange={e => setProject(e.target.value)}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #c4b5fd',
+                  borderRadius: 7, fontSize: 13 }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>USI / KKS Code</div>
+              <input value={usi} onChange={e => setUsi(e.target.value)}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #c4b5fd',
+                  borderRadius: 7, fontSize: 13 }} />
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: '#7c3aed', marginBottom: 12 }}>
+            New number preview: <strong>{doc.doc_type?.code || 'TYPE'}/{project || '…'}/{usi || '…'}/XXXX</strong>
+          </div>
+          <button onClick={doReassign} disabled={busy}
+            style={{ padding: '7px 20px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 7,
+              fontSize: 13, fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1 }}>
+            {busy ? 'Saving…' : 'Reassign Number'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -67,6 +323,10 @@ function MetaField({ field, val, setVal, locked }) {
 export default function DocumentDetail() {
   const { id } = useParams()
   const nav = useNavigate()
+  const location = useLocation()
+  const backTo = location.state?.from || '/documents'
+  const [searchParams] = useSearchParams()
+  const requestedVersion = searchParams.get('v') || null  // null = view current
   const [doc, setDoc] = useState(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('metadata')
@@ -84,6 +344,17 @@ export default function DocumentDetail() {
   const [wfNote, setWfNote] = useState('')
   const [wfAction, setWfAction] = useState(null)
   const [showVersionModal, setShowVersionModal] = useState(false)
+  const [showArchiveModal, setShowArchiveModal] = useState(false)
+  const [archiveReason, setArchiveReason]       = useState('')
+  const [showEditorsModal, setShowEditorsModal] = useState(false)
+  const [showAccessRequestModal, setShowAccessRequestModal] = useState(false)
+  const [accessRequestMsg, setAccessRequestMsg] = useState('')
+  const [accessRequestBusy, setAccessRequestBusy] = useState(false)
+  const [accessRequestSent, setAccessRequestSent] = useState('')
+  const [editorsList, setEditorsList]           = useState([])
+  const [editorSearch, setEditorSearch]         = useState('')
+  const [editorResults, setEditorResults]       = useState([])
+  const [savingEditors, setSavingEditors]       = useState(false)
   const [viewingFile, setViewingFile]           = useState(null)   // file object being previewed
   const [showFileUpload, setShowFileUpload]     = useState(false)
   const [uploadFiles, setUploadFiles]           = useState([])
@@ -165,9 +436,6 @@ export default function DocumentDetail() {
   }
 
   async function handleSubmitWorkflow() {
-    // First submit doc to Created status, then open workflow modal
-    await workflowAPI.submit(id)
-    await refresh()
     setShowWfModal(true)
   }
 
@@ -237,10 +505,10 @@ export default function DocumentDetail() {
     setTagSearch(q)
     if (!q.trim()) { setTagResults([]); setShowTagDrop(false); return }
     try {
-      const r = await adminAPI.listUsers({ q })
-      setTagResults((r.data || []).filter(u => u.is_active && u.id !== user?.id))
+      const r = await documentsAPI.searchUsers(q)
+      setTagResults(r.data || [])
       if (tagInputWrapRef.current) setTagDropRect(tagInputWrapRef.current.getBoundingClientRect())
-      setShowTagDrop(true)
+      setShowTagDrop((r.data || []).length > 0)
     } catch { setTagResults([]) }
   }
 
@@ -253,10 +521,58 @@ export default function DocumentDetail() {
     refresh()
   }
 
+  async function submitAccessRequest() {
+    setAccessRequestBusy(true); setAccessRequestSent('')
+    try {
+      const r = await documentsAPI.requestEditAccess(id, accessRequestMsg.trim())
+      setAccessRequestSent(r.data?.message || 'Request sent.')
+      setAccessRequestMsg('')
+      setTimeout(() => setShowAccessRequestModal(false), 2200)
+    } catch (e) {
+      setAccessRequestSent(e.response?.data?.error || 'Could not send request.')
+    } finally { setAccessRequestBusy(false) }
+  }
+
+  async function openEditorsModal() {
+    try {
+      const res = await documentsAPI.getEditors(id)
+      setEditorsList(res.data || [])
+    } catch {
+      setEditorsList(doc?.editors || [])
+    }
+    setEditorSearch('')
+    setEditorResults([])
+    setShowEditorsModal(true)
+  }
+
+  useEffect(() => {
+    if (!showEditorsModal) return
+    const q = editorSearch.trim()
+    if (!q) { setEditorResults([]); return }
+    const t = setTimeout(() => {
+      documentsAPI.searchUsers(q).then(r => {
+        const taken = new Set([doc?.creator?.id, ...editorsList.map(u => u.id)])
+        setEditorResults((r.data || []).filter(u => !taken.has(u.id)))
+      }).catch(() => setEditorResults([]))
+    }, 250)
+    return () => clearTimeout(t)
+  }, [editorSearch, showEditorsModal, editorsList, doc?.creator?.id])
+
+  async function saveEditors() {
+    setSavingEditors(true)
+    try {
+      await documentsAPI.setEditors(id, editorsList.map(u => u.id))
+      setShowEditorsModal(false)
+      refresh()
+    } catch (e) {
+      alert(e.response?.data?.error || 'Could not save editors')
+    } finally { setSavingEditors(false) }
+  }
+
   async function handleUploadVersion() {
-    if (!versionFile || !versionReason) return
+    if (!versionReason) return
     const fd = new FormData()
-    fd.append('file', versionFile)
+    if (versionFile) fd.append('file', versionFile)
     fd.append('change_reason', versionReason)
     fd.append('is_major', versionIsMajor)
     await documentsAPI.uploadVersion(id, fd)
@@ -414,11 +730,39 @@ export default function DocumentDetail() {
   if (loading) return <div style={{ padding: 32 }}><Spinner /></div>
   if (!doc) return <div style={{ padding: 32, color: '#A32D2D' }}>Document not found.</div>
 
+  // ── Historical version view ──────────────────────────────────────────────
+  // When ?v=X is in the URL and X is older than the current version, we show
+  // that version's metadata in a read-only view.
+  const viewingHistorical = !!requestedVersion && requestedVersion !== doc.current_version
+  const viewingVersionNumber = requestedVersion || doc.current_version
+  // Compute the supersession status of the historical version using the same
+  // rule the list uses: the highest non-current version is "Released",
+  // anything older is "Superseded".
+  let viewingVersionStatus = null
+  if (viewingHistorical && Array.isArray(doc.versions)) {
+    const verKey = (s) => String(s).split('.').map(p => parseInt(p) || 0)
+    const cmp = (a, b) => {
+      const ka = verKey(a), kb = verKey(b)
+      for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+        const da = ka[i] || 0, db = kb[i] || 0
+        if (da !== db) return da - db
+      }
+      return 0
+    }
+    const sorted = [...doc.versions].sort((a, b) => cmp(b.version_number, a.version_number))
+    const nonCurrent = sorted.filter(v => v.version_number !== doc.current_version)
+    const mainReleased = doc.status === 'Released'
+      ? doc.current_version
+      : (nonCurrent[0]?.version_number ?? null)
+    viewingVersionStatus = (requestedVersion === mainReleased) ? 'Released' : 'Superseded'
+  }
+
   const wf = doc.workflow
 
   // Workflow is only "active" (locking) once the document is under formal review
-  const inWorkflow = ['In Check','In Review','In Approval'].includes(doc.status)
+  const inWorkflow = ['In Check','In Review','In Approval','In Archive'].includes(doc.status)
   const wfActive   = wf && !wf.completed && inWorkflow
+  const inArchiveWorkflow = wfActive && wf?.purpose === 'archive'
 
   const LOCKED_STATUSES = ['In Check','In Review','In Approval','Approved','Released','Archived']
 
@@ -427,19 +771,24 @@ export default function DocumentDetail() {
   const isCheckedOutByOther = doc.checked_out && !isCheckedOutByMe
 
   // Can edit metadata in Draft or Created (preparation stage), not during formal review, not locked by someone else
-  const canEdit    = !LOCKED_STATUSES.includes(doc.status) && !isCheckedOutByOther
+  const isOwner   = doc.creator?.id === user?.id
+  const isAdminUser = ['System Admin', 'Sub Admin'].includes(user?.role)
+  const isEditor  = (doc.editors || []).some(u => u.id === user?.id)
+  const hasEditAccess = isOwner || isEditor || isAdminUser
+  const canEdit    = hasEditAccess && !LOCKED_STATUSES.includes(doc.status) && !isCheckedOutByOther
 
-  // Can upload files only in Draft or Created, no active workflow, not locked by someone else
-  const canUploadFile = (doc.status === 'Draft' || doc.status === 'Created') && !wfActive && !isCheckedOutByOther
+  // Can upload files only in Draft, no active workflow, not locked by someone else
+  const canUploadFile = doc.status === 'Draft' && !wfActive && !isCheckedOutByOther
 
   // Can create new version ONLY if currently Released
   const canNewVersion = doc.status === 'Released' && !wfActive
 
-  // Can delete document only in Draft/Created, no active workflow
-  const canDelete  = (doc.status === 'Draft' || doc.status === 'Created') && !wfActive
+  // Can delete document only in Draft, no active workflow
+  const canDelete  = doc.status === 'Draft' && !wfActive
 
-  // Flag for deletion: allowed in Prepare (or no workflow); blocked only during Check/Review/Approve
-  const canFlagDelete = !wfActive   // wfActive is only true when stage is In Check/Review/Approval
+  // Flag for deletion: allowed in Prepare (or no workflow); blocked during Check/Review/Approve
+  // and once Released (a released doc is part of the official record).
+  const canFlagDelete = !wfActive && doc.status !== 'Released'
 
   // Find the current user's pending task at the active step
   const myPendingTask = wf && !wf.completed
@@ -467,12 +816,18 @@ export default function DocumentDetail() {
     <div style={{ padding: '28px 32px', maxWidth: 1100 }}>
       {/* Back + header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <Btn label="← Back" onClick={() => nav('/documents')} title="Return to the documents list." />
+        <Btn label="← Back" onClick={() => {
+            // Step exactly one entry back so we land where the user came from
+            // (e.g. a doc-type drilldown inside the library). Falls back to a
+            // sensible default for direct/deep-linked visits.
+            if (window.history.length > 1) nav(-1)
+            else nav(backTo)
+          }} title="Go back one step." />
         <span style={{ fontSize: 12, color: '#9ca3af' }}>{doc.doc_number}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           {doc.confidential && <Badge label="Confidential" />}
           {doc.checked_out && <Badge label="Checked Out" />}
-          <Badge label={doc.status} />
+          <Badge label={viewingHistorical ? (viewingVersionStatus || 'Superseded') : doc.status} />
           {doc.workflow_history?.length > 0 && (
             <button
               onClick={() => setShowWfHistory(true)}
@@ -490,10 +845,99 @@ export default function DocumentDetail() {
       </div>
 
       <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700 }}>{doc.title}</h1>
-      <p style={{ margin: '0 0 20px', color: '#6b7280', fontSize: 13 }}>
-        {doc.doc_type?.name} · {doc.project || '—'} · USI: {doc.usi_kks_code || '—'} · v{doc.current_version}
+      <p style={{ margin: '0 0 8px', color: '#6b7280', fontSize: 13 }}>
+        {doc.doc_type?.name} · {doc.project || '—'} · USI: {doc.usi_kks_code || '—'} · v{viewingVersionNumber}
         {doc.serial_no && ` · ${doc.serial_no}`}
       </p>
+
+      {/* Owner / created info */}
+      {doc.creator && (
+        <div style={{
+          display:'flex', alignItems:'center', gap:10, marginBottom:16,
+          padding:'8px 12px', background:'#f8fafc',
+          border:'1px solid #e5e7eb', borderRadius:8, width:'fit-content',
+        }}>
+          <div style={{
+            width:30, height:30, borderRadius:'50%',
+            background:'linear-gradient(135deg,#3b82f6,#1d4ed8)',
+            color:'#fff', fontWeight:700, fontSize:11,
+            display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+          }}>
+            {(doc.creator.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+          </div>
+          <div style={{ fontSize:12, color:'#374151' }}>
+            <div><strong>Owner:</strong> {doc.creator.name}</div>
+            <div style={{ fontSize:11, color:'#6b7280' }}>
+              Created {fmtDate(doc.created_at)}
+              {doc.creator.email ? ` · ${doc.creator.email}` : ''}
+            </div>
+          </div>
+          {!hasEditAccess && (
+            <button
+              onClick={() => setShowAccessRequestModal(true)}
+              title="Request edit access from the document owner"
+              style={{
+                marginLeft:6, padding:'6px 12px', borderRadius:7,
+                background:'#185FA5', color:'#fff', border:'none',
+                fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap',
+              }}
+            >🔑 Request Edit Access</button>
+          )}
+        </div>
+      )}
+
+      {doc.status === 'Archived' && (
+        <div style={{
+          background:'#F1EFE8', border:'1px solid #B4B2A9', borderRadius:8,
+          padding:'10px 14px', marginBottom:16, fontSize:13, color:'#5F5E5A',
+          display:'flex', alignItems:'center', gap:10,
+        }}>
+          <span style={{ fontSize:16 }}>📦</span>
+          <span style={{ flex:1 }}>
+            <strong>Archived (Obsolete)</strong>
+            {doc.archived_at && <> on {fmtDate(doc.archived_at)} by {doc.archived_by?.name || 'system'}</>}.
+            {doc.obsolete_reason && <><br /><em>Reason:</em> {doc.obsolete_reason}</>}
+          </span>
+        </div>
+      )}
+
+      {inArchiveWorkflow && (
+        <div style={{
+          background:'#FEF3C7', border:'1px solid #F59E0B', borderRadius:8,
+          padding:'10px 14px', marginBottom:16, fontSize:13, color:'#854F0B',
+          display:'flex', alignItems:'center', gap:10,
+        }}>
+          <span style={{ fontSize:16 }}>📦</span>
+          <span style={{ flex:1 }}>
+            <strong>Archive workflow in progress</strong>
+            {' '}(Step {wf?.current_step} of {wf?.total_steps}).
+            Once final approval is given, this document will be marked Archived (Obsolete).
+            {doc.obsolete_reason && <><br /><em>Reason:</em> {doc.obsolete_reason}</>}
+          </span>
+        </div>
+      )}
+
+      {viewingHistorical && (
+        <div style={{
+          background:'#FEF3C7', border:'1px solid #F59E0B', borderRadius:8,
+          padding:'10px 14px', marginBottom:16, fontSize:13, color:'#854F0B',
+          display:'flex', alignItems:'center', gap:10,
+        }}>
+          <span style={{ fontSize:15 }}>🕒</span>
+          <span style={{ flex:1 }}>
+            Viewing historical version <strong>v{requestedVersion}</strong>
+            {viewingVersionStatus && <> — <strong>{viewingVersionStatus}</strong></>}.
+            Editing, workflow actions and uploads apply to the current version (v{doc.current_version}) only.
+          </span>
+          <button
+            onClick={() => nav(`/documents/${id}`)}
+            style={{
+              background:'#fff', border:'1px solid #F59E0B', color:'#854F0B',
+              borderRadius:6, padding:'5px 12px', fontSize:12, fontWeight:600, cursor:'pointer',
+            }}
+          >Switch to v{doc.current_version} →</button>
+        </div>
+      )}
 
       {/* Expiry alert */}
       {doc.expiry_date && (() => {
@@ -532,7 +976,7 @@ export default function DocumentDetail() {
       {wf && (
         <Card style={{ marginBottom: 16 }}>
           <SectionHead title="Workflow Progress" />
-          <WorkflowBar stage={wf.stage} completed={wf.completed} />
+          <WorkflowBar stage={wf.stage} completed={wf.completed} levels={wf.levels} current_step={wf.current_step} />
         </Card>
       )}
 
@@ -550,7 +994,7 @@ export default function DocumentDetail() {
         {canUploadFile && (
           <button
             onClick={() => setTab('files')}
-            title="Attach one or more files to this document. Available only while the document is in Draft or Created status and no approval workflow is active."
+            title="Attach one or more files to this document. Available only while the document is in Draft status and no approval workflow is active."
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '7px 16px', borderRadius: 8,
@@ -562,11 +1006,7 @@ export default function DocumentDetail() {
         )}
 
         {doc.status === 'Draft' && (
-          <Btn label="Submit for Workflow" onClick={handleSubmitWorkflow} variant="primary" icon="🚀"
-            title="Mark this document as ready and submit it for the formal Check → Review → Approve workflow. The document status will change from Draft to Created." />
-        )}
-        {doc.status === 'Created' && (
-          <Btn label="Initiate Workflow" onClick={() => setShowWfModal(true)} variant="primary" icon="⚙"
+          <Btn label="Initiate Workflow" onClick={handleSubmitWorkflow} variant="primary" icon="⚙"
             title="Configure the approval workflow — assign checkers, reviewers, and approvers — then start the formal review process for this document." />
         )}
         {canWfAction && (
@@ -579,7 +1019,7 @@ export default function DocumentDetail() {
           <Btn label="New Version" onClick={() => setShowVersionModal(true)}
             icon="📝" variant="primary"
             title="Create a new revision of this released document. The new version starts as Draft and must go through the full approval workflow before release." />
-        ) : doc.status !== 'Draft' && doc.status !== 'Created' && (
+        ) : doc.status !== 'Draft' && (
           <button disabled title={
             wfActive
               ? 'A workflow is in progress — complete or return the workflow before creating a new version.'
@@ -595,6 +1035,18 @@ export default function DocumentDetail() {
           title="Generate a shareable link that always points to the latest version of this document. Anyone with the link can view it." />
         <Btn label="Share v" onClick={() => handleShare(doc.current_version)} icon="📌"
           title={`Generate a shareable link pinned specifically to the current version (v${doc.current_version}). The link will not update if a newer version is released.`} />
+
+        {/* Archive — only when Released, no active workflow, no historical view */}
+        {doc.status === 'Released' && !wfActive && !viewingHistorical && (
+          <Btn label="Archive Document" onClick={() => setShowArchiveModal(true)} icon="📦"
+            title="Start an approval workflow to archive this document as obsolete. Once approved, the document is moved to Archived status and stays read-only as part of the audit record." />
+        )}
+
+        {/* Manage Editors — creator or admin only */}
+        {(doc.creator?.id === user?.id || ['System Admin','Sub Admin'].includes(user?.role)) && (
+          <Btn label="Editors" onClick={openEditorsModal} icon="👥"
+            title="Grant or revoke edit access to this document. Only the creator and listed editors (plus admins) can modify it." />
+        )}
 
         {/* Flag for Deletion */}
         {doc.flagged_for_deletion ? (
@@ -625,7 +1077,11 @@ export default function DocumentDetail() {
         ) : (
           <button
             disabled
-            title={`Deletion cannot be flagged while the document is in the ${wf?.stage} stage. Return the workflow to Prepare first.`}
+            title={
+              doc.status === 'Released'
+                ? 'Released documents are part of the official record and cannot be flagged for deletion.'
+                : `Deletion cannot be flagged while the document is in the ${wf?.stage} stage. Return the workflow to Prepare first.`
+            }
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '7px 16px', borderRadius: 8,
@@ -685,7 +1141,7 @@ export default function DocumentDetail() {
       {/* ── Metadata ─────────────────────────────────────────────────────────── */}
       {tab === 'metadata' && (() => {
         const schema = Array.isArray(doc.doc_type?.metadata_schema) ? doc.doc_type.metadata_schema : []
-        const inPrep = doc.status === 'Draft' || doc.status === 'Created'
+        const inPrep = doc.status === 'Draft'
 
         const cellCM = { background: '#f0f7ff', borderRadius: 8, padding: '10px 14px', border: '1px solid #bfdbfe' }
         const lblCM  = { fontSize: 11, color: '#185FA5', marginBottom: 2 }
@@ -771,10 +1227,10 @@ export default function DocumentDetail() {
             {/* ── EDIT FORM ── */}
             {metaEditMode && (
               <div>
-                {schema.some(f => f.restricted || lockedFields.includes(f.key)) && (
+                {schema.some(f => f.restricted || lockedFields.includes(f.key) || ['project','project_station_unit','usi','usi_kks_code'].includes(f.key)) && (
                   <div style={{ background: '#FAEEDA', border: '1px solid #EF9F27', borderRadius: 8,
                     padding: '8px 14px', marginBottom: 16, fontSize: 12, color: '#854F0B' }}>
-                    🔒 Fields marked <strong>Restricted</strong> are locked by administrator settings and cannot be edited during preparation.
+                    🔒 Fields marked <strong>Restricted</strong> are locked and cannot be edited. <strong>Project</strong> and <strong>USI</strong> are permanently locked as they form part of the document number — only a System Admin can reassign them.
                   </div>
                 )}
 
@@ -792,7 +1248,8 @@ export default function DocumentDetail() {
                   return (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
                       {effectiveFields.map(field => {
-                        const locked = lockedFields.includes(field.key) || !!field.restricted
+                        const DOC_NUMBER_FIELDS = ['project', 'project_station_unit', 'usi', 'usi_kks_code']
+                        const locked = lockedFields.includes(field.key) || !!field.restricted || DOC_NUMBER_FIELDS.includes(field.key)
                         const val = editForm.custom_metadata?.[field.key] ?? ''
                         const setVal = v => setEditForm(f => ({ ...f, custom_metadata: { ...f.custom_metadata, [field.key]: v } }))
                         return (
@@ -1217,7 +1674,7 @@ export default function DocumentDetail() {
                       ❌ Reject
                     </button>
                     <button onClick={() => setWfAction('return')}
-                      title="Return the document for correction without a hard rejection. The workflow resets to Created status so the initiator can reconfigure approvers and re-submit."
+                      title="Return the document for correction without a hard rejection. The workflow resets to Draft status so the initiator can reconfigure approvers and re-initiate."
                       style={{ padding: '9px 20px', borderRadius: 8,
                         border: '1px solid #e5e7eb', background: '#fff',
                         color: '#374151', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
@@ -1234,7 +1691,34 @@ export default function DocumentDetail() {
                   Waiting for approvers at step {wf.current_step} to complete their review.
                 </div>
               )}
+
+              {/* ── Admin Workflow Recovery ── */}
+              {['System Admin', 'Sub Admin'].includes(user?.role) && wf && !wf.completed && (
+                <AdminWorkflowRecovery
+                  docId={id} wf={wf} users={users}
+                  onDone={() => refresh()}
+                />
+              )}
+
+              {/* ── Admin Reassign Doc Number ── */}
+              {user?.role === 'System Admin' && (
+                <AdminReassignDocNumber doc={doc} onDone={() => refresh()} />
+              )}
             </>
+          )}
+
+          {/* Admin Fix Status — shown even when no workflow (orphaned status) */}
+          {user?.can_delete && !wf && inWorkflow && (
+            <div style={{ marginTop: 20, padding: 16, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#9a3412', marginBottom: 8 }}>⚠ Orphaned Status</div>
+              <div style={{ fontSize: 12, color: '#7c2d12', marginBottom: 12 }}>
+                Document status is "{doc.status}" but no workflow instance exists. Click below to fix.
+              </div>
+              <button
+                onClick={async () => { await workflowAPI.adminFixStatus(id); refresh() }}
+                style={{ padding: '7px 16px', background: '#ea580c', color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              >Fix Status</button>
+            </div>
           )}
         </div>
       )}
@@ -1242,45 +1726,97 @@ export default function DocumentDetail() {
       {/* ── Audit Log ────────────────────────────────────────────────────────── */}
       {tab === 'audit' && (
         <div>
-          {doc.audit_logs?.length === 0 ? <Empty message="No audit entries." /> : (
-            <div style={{ position: 'relative' }}>
-              {[...doc.audit_logs].reverse().map((e, i) => (
-                <div key={e.id} style={{ display: 'flex', gap: 14, paddingBottom: 14 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
-                    <div style={{ width: 10, height: 10, background: '#185FA5', borderRadius: '50%', marginTop: 4 }} />
-                    {i < doc.audit_logs.length - 1 && <div style={{ width: 2, flex: 1, background: '#e5e7eb', marginTop: 4 }} />}
-                  </div>
-                  <div style={{ paddingBottom: 4 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{e.action}</div>
-                    <div style={{ fontSize: 12, color: '#6b7280' }}>by {e.user?.name || 'System'}</div>
-                    <div style={{ fontSize: 11, color: '#9ca3af' }}>{fmtDateTime(e.timestamp)}</div>
-                    {e.note && <div style={{ fontSize: 12, color: '#374151', marginTop: 2, background: '#f9fafb', padding: '4px 8px', borderRadius: 4 }}>{e.note}</div>}
-                    {e.old_value && Object.keys(e.old_value).length > 0 && (
-                      <div style={{ fontSize: 11, marginTop: 4, background: '#f9fafb', padding: '5px 8px', borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {Object.entries(e.old_value).map(([k, oldVal]) => {
-                          const newVal = e.new_value?.[k]
-                          const emptyStyle = { color: '#9ca3af', fontStyle: 'italic', fontSize: 10 }
-                          return (
-                            <div key={k}>
-                              <span style={{ color: '#6b7280', fontWeight: 600 }}>{k}:</span>
-                              {' '}
-                              {oldVal != null && oldVal !== ''
-                                ? <span style={{ color: '#A32D2D' }}>{oldVal}</span>
-                                : <span style={emptyStyle}>(empty)</span>}
-                              {' → '}
-                              {newVal != null && newVal !== ''
-                                ? <span style={{ color: '#0F6E56' }}>{newVal}</span>
-                                : <span style={emptyStyle}>(empty)</span>}
+          {doc.audit_logs?.length === 0 ? <Empty message="No audit entries." /> : (() => {
+            // Flatten: one row per changed field, or one row per event if no fields
+            const rows = []
+            ;[...doc.audit_logs].reverse().forEach(e => {
+              const hasFields = e.old_value && Object.keys(e.old_value).length > 0
+              if (hasFields) {
+                Object.entries(e.old_value).forEach(([field, oldVal]) => {
+                  rows.push({ id: `${e.id}-${field}`, timestamp: e.timestamp, user: e.user, action: e.action, note: e.note, field, oldVal, newVal: e.new_value?.[field] })
+                })
+              } else {
+                rows.push({ id: e.id, timestamp: e.timestamp, user: e.user, action: e.action, note: e.note, field: null, oldVal: null, newVal: null })
+              }
+            })
+
+            const thStyle = { padding: '10px 14px', fontSize: 11, fontWeight: 700, color: '#6b7280', textAlign: 'left', letterSpacing: '.06em', textTransform: 'uppercase', background: '#f8fafc', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' }
+            const tdStyle = { padding: '10px 14px', fontSize: 12, color: '#374151', borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' }
+
+            return (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Timestamp</th>
+                      <th style={thStyle}>User</th>
+                      <th style={thStyle}>Field</th>
+                      <th style={{ ...thStyle, width: '20%' }}>Old</th>
+                      <th style={{ ...thStyle, width: '20%' }}>New</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, i) => (
+                      <tr key={row.id} style={{ background: i % 2 === 0 ? '#fff' : '#fafbfc' }}
+                        onMouseEnter={e => e.currentTarget.style.background = '#f0f7ff'}
+                        onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? '#fff' : '#fafbfc'}
+                      >
+                        {/* TIMESTAMP */}
+                        <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                          <div style={{ fontWeight: 500, color: '#374151' }}>
+                            {row.timestamp ? new Date(row.timestamp).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) : '—'}
+                          </div>
+                          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                            {row.timestamp ? new Date(row.timestamp).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit' }) : ''}
+                          </div>
+                        </td>
+
+                        {/* USER */}
+                        <td style={tdStyle}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#e0eaf8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#0C447C', flexShrink: 0 }}>
+                              {(row.user?.name || 'S').charAt(0).toUpperCase()}
                             </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                            <span style={{ fontWeight: 500 }}>{row.user?.name || 'System'}</span>
+                          </div>
+                        </td>
+
+                        {/* FIELD */}
+                        <td style={tdStyle}>
+                          {row.field ? (
+                            <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, background: '#1e293b', color: '#fff', fontSize: 11, fontWeight: 600 }}>{row.field}</span>
+                          ) : (
+                            <div>
+                              <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, background: '#e0eaf8', color: '#0C447C', fontSize: 11, fontWeight: 600 }}>{row.action}</span>
+                              {row.note && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 3 }}>{row.note}</div>}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* OLD */}
+                        <td style={tdStyle}>
+                          {row.field && (
+                            row.oldVal != null && row.oldVal !== ''
+                              ? <div style={{ background: '#fff5f5', border: '1px solid #fecaca', borderRadius: 6, padding: '4px 10px', color: '#991b1b', fontSize: 12, display: 'inline-block', maxWidth: 200, wordBreak: 'break-word' }}>{row.oldVal}</div>
+                              : <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 10px', color: '#9ca3af', fontSize: 11, fontStyle: 'italic', display: 'inline-block' }}>—</div>
+                          )}
+                        </td>
+
+                        {/* NEW */}
+                        <td style={tdStyle}>
+                          {row.field && (
+                            row.newVal != null && row.newVal !== ''
+                              ? <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 6, padding: '4px 10px', color: '#166534', fontSize: 12, display: 'inline-block', maxWidth: 200, wordBreak: 'break-word' }}>{row.newVal}</div>
+                              : <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 10px', color: '#9ca3af', fontSize: 11, fontStyle: 'italic', display: 'inline-block' }}>—</div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })()}
         </div>
       )}
 
@@ -1625,7 +2161,7 @@ export default function DocumentDetail() {
           }}>
             {wfAction === 'advance' && 'This will approve the document at your level. If all approvers at this level approve, the document advances to the next stage.'}
             {wfAction === 'reject'  && 'This will reject the document and return it to Draft. The workflow will be reset and the author can re-initiate after corrections.'}
-            {wfAction === 'return'  && 'This will reset the entire workflow and return the document to Created status. The initiator can re-initiate with correct configuration.'}
+            {wfAction === 'return'  && 'This will reset the entire workflow and return the document to Draft status. The initiator can re-initiate with correct configuration.'}
           </div>
 
           {/* Note / comment */}
@@ -1722,18 +2258,21 @@ export default function DocumentDetail() {
           </div>
           <div style={{
             border: '2px dashed #d1d5db', borderRadius: 8, padding: 20, textAlign: 'center',
-            marginBottom: 16, cursor: 'pointer', background: versionFile ? '#f0fdf4' : '#fafafa',
+            marginBottom: 8, cursor: 'pointer', background: versionFile ? '#f0fdf4' : '#fafafa',
           }} onClick={() => document.getElementById('ver-input').click()}>
             {versionFile
               ? <div style={{ fontSize: 13, color: '#0F6E56', fontWeight: 500 }}>✅ {versionFile.name}</div>
-              : <div style={{ fontSize: 13, color: '#6b7280' }}>Drop new file or click to browse</div>
+              : <div style={{ fontSize: 13, color: '#6b7280' }}>Drop new file or click to browse <span style={{ color:'#9ca3af' }}>(optional)</span></div>
             }
             <input id="ver-input" type="file" style={{ display: 'none' }}
               onChange={e => setVersionFile(e.target.files[0])} />
           </div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 16 }}>
+            You can attach the file later from the Files tab — only the change reason is required to create the version.
+          </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <Btn label="Cancel" onClick={() => setShowVersionModal(false)} />
-            <Btn label="Upload Version" variant="primary" disabled={!versionFile || !versionReason} onClick={handleUploadVersion} />
+            <Btn label={versionFile ? 'Upload Version' : 'Create Version'} variant="primary" disabled={!versionReason.trim()} onClick={handleUploadVersion} />
           </div>
         </Modal>
       )}
@@ -1765,8 +2304,148 @@ export default function DocumentDetail() {
           docTitle={doc.title}
           docTypeId={doc.doc_type?.id}
           currentUser={user}
+          editors={doc.editors || []}
           onClose={() => setShowWfModal(false)}
           onSuccess={() => { setShowWfModal(false); refresh() }}
+        />
+      )}
+
+      {/* Editors Modal */}
+      {showEditorsModal && (
+        <Modal title="Manage Editors" onClose={() => setShowEditorsModal(false)}>
+          <div style={{ fontSize:12, color:'#6b7280', marginBottom:12 }}>
+            The creator and any users listed below can edit this document.
+            Admins can always edit.
+          </div>
+
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:11, fontWeight:600, color:'#6b7280', marginBottom:6 }}>
+              Owner (always has access)
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px',
+              background:'#f8fafc', borderRadius:8 }}>
+              <span style={{ fontSize:13, fontWeight:500 }}>{doc?.creator?.name || '—'}</span>
+              {doc?.creator && <span style={{ fontSize:11, color:'#9ca3af' }}>creator</span>}
+            </div>
+          </div>
+
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:11, fontWeight:600, color:'#6b7280', marginBottom:6 }}>
+              Editors ({editorsList.length})
+            </div>
+            {editorsList.length === 0 ? (
+              <div style={{ fontSize:12, color:'#9ca3af', padding:'6px 10px' }}>
+                No additional editors yet — only the creator and admins can edit.
+              </div>
+            ) : editorsList.map(u => (
+              <div key={u.id} style={{ display:'flex', alignItems:'center', gap:8,
+                padding:'7px 10px', background:'#fff', border:'1px solid #e5e7eb',
+                borderRadius:8, marginBottom:6 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:500 }}>{u.name}</div>
+                  <div style={{ fontSize:11, color:'#9ca3af' }}>{u.email}</div>
+                </div>
+                <button
+                  onClick={() => setEditorsList(l => l.filter(x => x.id !== u.id))}
+                  style={{ background:'none', border:'none', cursor:'pointer',
+                    color:'#9ca3af', fontSize:16 }}
+                  title="Remove">×</button>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginBottom:12, position:'relative' }}>
+            <div style={{ fontSize:11, fontWeight:600, color:'#6b7280', marginBottom:6 }}>
+              Add an editor
+            </div>
+            <input
+              value={editorSearch}
+              onChange={e => setEditorSearch(e.target.value)}
+              placeholder="Search by name, email, or SAP ID…"
+              style={{ width:'100%', boxSizing:'border-box', padding:'8px 12px',
+                fontSize:13, border:'1px solid #e5e7eb', borderRadius:8 }}
+            />
+            {editorResults.length > 0 && (
+              <div style={{ marginTop:6, border:'1px solid #e5e7eb', borderRadius:8,
+                maxHeight:180, overflowY:'auto', background:'#fff' }}>
+                {editorResults.map(u => (
+                  <div key={u.id}
+                    onClick={() => {
+                      setEditorsList(l => [...l, u])
+                      setEditorSearch('')
+                      setEditorResults([])
+                    }}
+                    style={{ padding:'8px 12px', cursor:'pointer',
+                      borderBottom:'1px solid #f3f4f6', fontSize:13 }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#f0f7ff'}
+                    onMouseLeave={e => e.currentTarget.style.background = '#fff'}
+                  >
+                    <div style={{ fontWeight:500 }}>{u.name}</div>
+                    <div style={{ fontSize:11, color:'#9ca3af' }}>
+                      {u.email}{u.department ? ` · ${u.department}` : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+            <Btn label="Cancel" onClick={() => setShowEditorsModal(false)} />
+            <Btn label={savingEditors ? 'Saving…' : 'Save'}
+              variant="primary" disabled={savingEditors} onClick={saveEditors} />
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit-access request modal */}
+      {showAccessRequestModal && (
+        <Modal title="Request Edit Access" onClose={() => setShowAccessRequestModal(false)}>
+          <div style={{ fontSize:13, color:'#6b7280', marginBottom:14 }}>
+            Send a request to <strong style={{ color:'#111827' }}>{doc?.creator?.name || 'the document owner'}</strong> asking to be added as an editor on this document.
+          </div>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:4 }}>
+            Optional message
+          </label>
+          <textarea
+            value={accessRequestMsg}
+            onChange={e => setAccessRequestMsg(e.target.value)}
+            rows={3}
+            placeholder="Why do you need edit access?"
+            style={{ width:'100%', boxSizing:'border-box', padding:'8px 10px',
+              fontSize:13, border:'1px solid #d1d5db', borderRadius:8,
+              fontFamily:'inherit', resize:'vertical', marginBottom:12 }}
+          />
+          {accessRequestSent && (
+            <div style={{
+              background: accessRequestSent.startsWith('Could not') ? '#FCEBEB' : '#E1F5EE',
+              color: accessRequestSent.startsWith('Could not') ? '#A32D2D' : '#0F6E56',
+              padding:'8px 12px', borderRadius:8, fontSize:12, marginBottom:12,
+            }}>{accessRequestSent}</div>
+          )}
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+            <Btn label="Cancel" onClick={() => setShowAccessRequestModal(false)} />
+            <Btn
+              label={accessRequestBusy ? 'Sending…' : 'Send Request'}
+              variant="primary"
+              disabled={accessRequestBusy}
+              onClick={submitAccessRequest}
+            />
+          </div>
+        </Modal>
+      )}
+
+      {/* Archive Workflow Modal */}
+      {showArchiveModal && (
+        <WorkflowInitModal
+          docId={parseInt(id)}
+          docTitle={doc.title}
+          docTypeId={doc.doc_type?.id}
+          currentUser={user}
+          editors={doc.editors || []}
+          purpose="archive"
+          onClose={() => setShowArchiveModal(false)}
+          onSuccess={() => { setShowArchiveModal(false); refresh() }}
         />
       )}
 

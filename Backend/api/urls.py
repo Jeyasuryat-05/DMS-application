@@ -1,5 +1,5 @@
 from django.urls import path
-from api.views import auth_views, document_views, workflow_views, report_views, admin_views, alert_views, converter_views, library_views
+from api.views import auth_views, document_views, workflow_views, report_views, admin_views, alert_views, library_views
 
 urlpatterns = [
     # ── Health ────────────────────────────────────────────────────────────────
@@ -29,9 +29,15 @@ urlpatterns = [
     path('documents/<int:doc_id>/files/<int:file_id>/download', document_views.download_file),
     path('documents/<int:doc_id>/files/<int:file_id>/view', document_views.view_file),
     path('documents/<int:doc_id>/files/<int:file_id>', document_views.delete_file),
+    path('documents/<int:doc_id>/reassign', document_views.reassign_doc_number),
+    path('documents/<int:doc_id>/editors', document_views.document_editors),
+    path('documents/<int:doc_id>/request-edit-access', document_views.request_edit_access),
+    path('access-requests/incoming', document_views.incoming_access_requests),
+    path('access-requests/<int:request_id>/decide', document_views.decide_access_request),
     path('documents/<int:doc_id>/flag-deletion', document_views.flag_deletion),
     path('documents/<int:doc_id>/unflag-deletion', document_views.unflag_deletion),
     path('documents/<int:doc_id>/file-access-stats', document_views.file_access_stats),
+    path('users/search', document_views.search_users),
 
     # ── Workflow ──────────────────────────────────────────────────────────────
     path('workflow/inbox', workflow_views.my_inbox),
@@ -48,6 +54,9 @@ urlpatterns = [
     path('workflow/<int:doc_id>/checklist-submit/<int:task_id>', workflow_views.submit_completed_checklist),
     path('workflow/<int:doc_id>/checklist-submit/<int:task_id>/download', workflow_views.download_completed_checklist),
     path('workflow/<int:doc_id>/history-checklist/download', workflow_views.download_history_checklist),
+    path('workflow/<int:doc_id>/admin-force-reset', workflow_views.admin_force_reset),
+    path('workflow/<int:doc_id>/admin-reassign', workflow_views.admin_reassign),
+    path('workflow/<int:doc_id>/admin-fix-status', workflow_views.admin_fix_status),
 
     # ── Reports ───────────────────────────────────────────────────────────────
     path('reports/summary', report_views.summary),
@@ -72,6 +81,7 @@ urlpatterns = [
     path('admin/seed-metadata-schemas', admin_views.seed_metadata_schemas),
     path('admin/fix-checklist-required', admin_views.fix_checklist_required),
     path('admin/run-deletion-job', admin_views.run_deletion_job),
+    path('admin/run-auto-archive-job', admin_views.run_auto_archive_job),
     path('admin/flagged-documents', admin_views.flagged_documents),
     path('admin/logs/deletions', admin_views.deletion_logs),
     path('admin/logs/deletions/download', admin_views.deletion_logs_download),
@@ -86,12 +96,10 @@ urlpatterns = [
     path('alerts/config/<int:doc_type_id>', alert_views.update_alert_config),
     path('alerts/upcoming', alert_views.upcoming_expirations),
 
-    # ── Converter ─────────────────────────────────────────────────────────────
-    path('convert/files/<int:file_id>/pdf', converter_views.get_as_pdf),
-
     # ── Document Library ──────────────────────────────────────────────────────
     path('library/tree', library_views.folder_tree),
     path('library/folders', library_views.folders),
     path('library/folders/<int:folder_id>', library_views.folder_detail),
     path('library/folders/<int:folder_id>/documents', library_views.folder_documents),
+    path('library/doc-types/<int:doc_type_id>/documents', library_views.doc_type_documents),
 ]

@@ -1,6 +1,8 @@
 # Environment secrets — never commit
 Backend/.env
 .env
+!Backend/.env.example
+!Frontend/.env.example
 
 # Python
 __pycache__/

@@ -3,13 +3,15 @@ import { useAuth } from '../hooks/useAuth'
 import { useState, useEffect, useRef } from 'react'
 import { workflowAPI, authAPI } from '../api'
 
+const ADMIN_ROLES = ['System Admin', 'Sub Admin']
+
 const NAV = [
   { to: '/',          icon: '🏠', label: 'Dashboard' },
   { to: '/documents', icon: '📄', label: 'Documents' },
-  { to: '/library',   icon: '📚', label: 'Document Library' },
+  { to: '/library',   icon: '📚', label: 'Document Folder' },
   { to: '/workflow',  icon: '🔄', label: 'Workflow' },
   { to: '/reports',   icon: '📊', label: 'Reports' },
-  { to: '/admin',     icon: '⚙️', label: 'Administration' },
+  { to: '/admin',     icon: '⚙️', label: 'Administration', roles: ADMIN_ROLES },
 ]
 
 function Avatar({ src, name, size = 36 }) {
@@ -229,7 +231,7 @@ export default function Layout() {
   const [profileOpen, setProfileOpen] = useState(false)
 
   useEffect(() => {
-    workflowAPI.pending().then(r => setPendingCount(r.data.length)).catch(() => {})
+    workflowAPI.inbox().then(r => setPendingCount(r.data.length)).catch(() => {})
   }, [])
 
   function handleLogout() {
@@ -263,7 +265,7 @@ export default function Layout() {
 
         {/* Nav links */}
         <nav style={{ flex: 1, padding: '12px 0' }}>
-          {NAV.map(item => (
+          {NAV.filter(item => !item.roles || item.roles.includes(user?.role)).map(item => (
             <NavLink key={item.to} to={item.to} end={item.to === '/'} style={({ isActive }) => ({
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '10px 16px', textDecoration: 'none', fontSize: 13, fontWeight: 500,

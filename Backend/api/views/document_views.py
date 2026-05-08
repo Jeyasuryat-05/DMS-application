@@ -11,8 +11,9 @@ from rest_framework.response import Response
 from api.models import (
     Document, DocumentType, DocumentVersion, DocumentFile,
     DocumentReference, DocumentFeedback, AuditLog, FileAccessLog,
-    WorkflowInstance, WorkflowHistorySnapshot, User,
+    WorkflowInstance, WorkflowHistorySnapshot, User, EditAccessRequest,
 )
+from api import email_utils
 
 UPLOAD_DIR = 'uploads'
 ALLOWED_FORMATS = {
@@ -65,6 +66,7 @@ def _doc_to_dict(d):
             workflow_dict = {
                 'id': wf.id,
                 'mode': str(wf.mode or 'Auto Populate'),
+                'purpose': str(getattr(wf, 'purpose', 'release') or 'release'),
                 'stage': str(wf.stage or 'Prepare'),
                 'current_step': int(wf.current_step or 1),
                 'total_steps': int(wf.total_steps or 4),
@@ -172,7 +174,55 @@ def _list_documents(request):
                 expiry_date__gte=datetime.utcnow(),
             )
         docs = qs.order_by('-created_at')[skip:skip + limit]
-        return Response([_doc_to_dict(d) for d in docs])
+        out = []
+        for d in docs:
+            base = _doc_to_dict(d)
+            versions = list(
+                DocumentVersion.objects.filter(document_id=d.id).order_by('-created_at')
+            )
+            if not versions:
+                # No version history recorded — emit a single row from the document.
+                out.append(base)
+                continue
+
+            # Identify the "main Released" version. Only one version is officially
+            # released at any time; older released versions become Superseded.
+            #   - If the doc itself is Released → the current version is the main.
+            #   - Otherwise (Draft / In workflow) → the most recent prior version is
+            #     the main (since a new version can only be created from a Released
+            #     parent, all earlier versions were Released at some point).
+            if d.status == 'Released':
+                main_version = d.current_version
+            else:
+                non_current = [v for v in versions if v.version_number != d.current_version]
+                main_version = non_current[0].version_number if non_current else None
+
+            for v in versions:
+                row = dict(base)
+                row['version_id']      = v.id
+                row['current_version'] = v.version_number
+                row['version_change_reason'] = v.change_reason or ''
+                row['version_change_label']  = v.change_label or ''
+                if v.version_number == d.current_version:
+                    # Current version row keeps the document's live status / workflow.
+                    pass
+                elif v.version_number == main_version:
+                    row['status']      = 'Released'
+                    row['status_code'] = '30'
+                    row['workflow']    = None
+                else:
+                    row['status']      = 'Superseded'
+                    row['status_code'] = '40'
+                    row['workflow']    = None
+                if v.created_at:
+                    row['created_at'] = _iso(v.created_at)
+                out.append(row)
+        # If a status filter is in effect, drop expanded rows whose effective
+        # status no longer matches (e.g. user filtered to Draft but historic
+        # versions were marked Released).
+        if status_filter:
+            out = [r for r in out if r.get('status') == status_filter]
+        return Response(out)
     except Exception:
         print('list_documents error:', traceback.format_exc())
         return Response([])
@@ -199,18 +249,62 @@ def _create_document(request):
         except DocumentType.DoesNotExist:
             return Response({'error': 'Document type not found'}, status=404)
 
-        count = Document.objects.filter(doc_type_id=doc_type_id).count() + 1
-        pattern = doc_type.number_pattern or '{CODE}-{YEAR}-{SEQ}'
-        seq_str = str(count).zfill(4)
-        doc_number = (pattern
-                      .replace('{CODE}', doc_type.code or 'DOC')
-                      .replace('{TYPE}', doc_type.code or 'DOC')
-                      .replace('{YEAR}', str(datetime.now().year))
-                      .replace('{SEQ}', seq_str))
-
         parsed_meta = json.loads(custom_metadata or '{}')
-        usi_from_meta = parsed_meta.pop('usi', None) or parsed_meta.pop('usi_kks_code', None) or usi_kks_code
-        project_from_meta = parsed_meta.pop('project', None) or project
+        usi_from_meta = (parsed_meta.get('usi') or parsed_meta.get('usi_kks_code') or usi_kks_code or '').strip() or None
+        # USI must be a numeric 5-digit string (UI enforces this; this is the
+        # backend defence-in-depth so a hand-crafted request can't bypass it).
+        import re as _re
+        if usi_from_meta and not _re.fullmatch(r'\d{5}', usi_from_meta):
+            return Response({'error': 'USI must be exactly 5 numeric digits.'}, status=400)
+
+        # Generic char / numeric metadata field validation (driven by the
+        # doc-type schema). Applies on top of the USI special-case above.
+        for f in (doc_type.metadata_schema or []):
+            if not isinstance(f, dict):
+                continue
+            ftype = f.get('type')
+            if ftype not in ('char', 'numeric'):
+                continue
+            v = parsed_meta.get(f.get('key'))
+            if v in (None, ''):
+                continue
+            v = str(v)
+            if ftype == 'numeric' and not _re.fullmatch(r'\d+', v):
+                return Response({'error': f'"{f.get("label")}" must contain digits only.'}, status=400)
+            fixed = f.get('length')
+            if fixed and len(v) != fixed:
+                return Response({'error': f'"{f.get("label")}" must be exactly {fixed} {"digits" if ftype=="numeric" else "characters"}.'}, status=400)
+            if not fixed:
+                if f.get('min_length') and len(v) < f['min_length']:
+                    return Response({'error': f'"{f.get("label")}" must be at least {f["min_length"]} characters.'}, status=400)
+                if f.get('max_length') and len(v) > f['max_length']:
+                    return Response({'error': f'"{f.get("label")}" must be at most {f["max_length"]} characters.'}, status=400)
+
+        # Expiry date must be strictly later than revision due date.
+        if expiry_date and revision_due:
+            try:
+                _exp = datetime.fromisoformat(expiry_date)
+                _rev = datetime.fromisoformat(revision_due)
+                if _exp <= _rev:
+                    return Response({'error': 'Expiry date must be later than revision due date.'}, status=400)
+            except (ValueError, TypeError):
+                pass
+        # project_station_unit is the primary key; fall back to 'project' key or the top-level project field
+        project_from_meta = (
+            parsed_meta.get('project_station_unit') or
+            parsed_meta.get('project') or
+            project or ''
+        ).strip() or None
+
+        # Generate doc number: DocType/ProjectCode/USI/SerialNumber
+        type_code = (doc_type.code or 'DOC').strip()
+        proj_code = (project_from_meta or 'PROJ').strip()
+        usi_code  = (usi_from_meta or 'USI').strip()
+        seq = Document.objects.filter(doc_type_id=doc_type_id, project=proj_code, usi_kks_code=usi_code).count() + 1
+        doc_number = f'{type_code}/{proj_code}/{usi_code}/{str(seq).zfill(4)}'
+        while Document.objects.filter(doc_number=doc_number).exists():
+            seq += 1
+            doc_number = f'{type_code}/{proj_code}/{usi_code}/{str(seq).zfill(4)}'
 
         doc = Document(
             doc_number=doc_number,
@@ -324,6 +418,19 @@ def _get_document(request, doc_id):
             {'id': doc.checked_out_by.id, 'name': doc.checked_out_by.name}
             if doc.checked_out_by_id else None
         )
+        base['obsolete_reason'] = getattr(doc, 'obsolete_reason', None)
+        base['archived_at'] = _iso(getattr(doc, 'archived_at', None))
+        base['archived_by'] = (
+            {'id': doc.archived_by.id, 'name': doc.archived_by.name}
+            if getattr(doc, 'archived_by_id', None) else None
+        )
+        try:
+            base['editors'] = [
+                {'id': u.id, 'name': u.name, 'email': u.email}
+                for u in doc.editors.all()
+            ]
+        except Exception:
+            base['editors'] = []
         base['versions'] = [
             {
                 'id': v.id, 'version_number': v.version_number,
@@ -441,6 +548,9 @@ def _update_document(request, doc_id):
         except Document.DoesNotExist:
             return Response({'error': 'Document not found'}, status=404)
 
+        if not _can_edit_doc(request.user, doc):
+            return Response({'error': 'You do not have permission to edit this document. Only the creator, designated editors, or an admin can make changes.'}, status=403)
+
         if doc.status in ('Approved', 'Released', 'Archived'):
             return Response({'error': 'Cannot modify Approved, Released or Archived documents.'}, status=403)
         if doc.status in ('In Check', 'In Review', 'In Approval'):
@@ -455,7 +565,9 @@ def _update_document(request, doc_id):
 
         data = request.data
         DATE_FIELDS = {'expiry_date', 'renewal_date', 'revision_due'}
-        SKIP_FIELDS = {'id', 'doc_number', 'creator_id', 'status', 'current_version'}
+        # project and usi_kks_code are locked — they form part of the doc number
+        SKIP_FIELDS = {'id', 'doc_number', 'serial_no', 'creator_id', 'status', 'current_version',
+                       'project', 'usi_kks_code'}
 
         old_cm = dict(doc.custom_metadata or {})
 
@@ -476,6 +588,38 @@ def _update_document(request, doc_id):
                 incoming_cm = {}
         else:
             incoming_cm = dict(_raw_cm)
+
+        # USI must be exactly 5 numeric digits (mirrors create-time guard).
+        import re as _re
+        for _usi_key in ('usi', 'usi_kks_code'):
+            _v = incoming_cm.get(_usi_key)
+            if _v not in (None, ''):
+                _v = str(_v).strip()
+                if not _re.fullmatch(r'\d{5}', _v):
+                    return Response({'error': 'USI must be exactly 5 numeric digits.'}, status=400)
+                incoming_cm[_usi_key] = _v
+
+        # Generic char / numeric schema validation.
+        for f in (doc.doc_type.metadata_schema or []) if doc.doc_type else []:
+            if not isinstance(f, dict):
+                continue
+            ftype = f.get('type')
+            if ftype not in ('char', 'numeric'):
+                continue
+            v = incoming_cm.get(f.get('key'))
+            if v in (None, ''):
+                continue
+            v = str(v)
+            if ftype == 'numeric' and not _re.fullmatch(r'\d+', v):
+                return Response({'error': f'"{f.get("label")}" must contain digits only.'}, status=400)
+            fixed = f.get('length')
+            if fixed and len(v) != fixed:
+                return Response({'error': f'"{f.get("label")}" must be exactly {fixed} {"digits" if ftype=="numeric" else "characters"}.'}, status=400)
+            if not fixed:
+                if f.get('min_length') and len(v) < f['min_length']:
+                    return Response({'error': f'"{f.get("label")}" must be at least {f["min_length"]} characters.'}, status=400)
+                if f.get('max_length') and len(v) > f['max_length']:
+                    return Response({'error': f'"{f.get("label")}" must be at most {f["max_length"]} characters.'}, status=400)
 
         def _s(v):
             if v is None or v == '':
@@ -512,8 +656,10 @@ def _update_document(request, doc_id):
         _rev = incoming_cm.get('revision_due') or (doc.revision_due.isoformat() if doc.revision_due else None)
         if _exp and _rev:
             try:
-                if datetime.fromisoformat(str(_rev).split('T')[0]) > datetime.fromisoformat(str(_exp).split('T')[0]):
-                    return Response({'error': 'Revision Due date cannot be later than the Expiry Date.'}, status=400)
+                _e = datetime.fromisoformat(str(_exp).split('T')[0])
+                _r = datetime.fromisoformat(str(_rev).split('T')[0])
+                if _e <= _r:
+                    return Response({'error': 'Expiry date must be later than revision due date.'}, status=400)
             except Exception:
                 pass
 
@@ -532,12 +678,9 @@ def _update_document(request, doc_id):
                     if core_attr not in update_fields:
                         update_fields.append(core_attr)
 
-        for meta_key, core_attr in [('usi', 'usi_kks_code'), ('usi_kks_code', 'usi_kks_code'), ('project', 'project')]:
-            if meta_key in incoming_cm:
-                val = incoming_cm[meta_key]
-                setattr(doc, core_attr, val if val else None)
-                if core_attr not in update_fields:
-                    update_fields.append(core_attr)
+        # project/station and usi are locked — silently drop from incoming metadata
+        for locked_key in ('usi', 'usi_kks_code', 'project', 'project_station_unit'):
+            incoming_cm.pop(locked_key, None)
 
         if 'custom_metadata' in data:
             merged_cm = {**old_cm, **incoming_cm}
@@ -647,6 +790,23 @@ def add_feedback(request, doc_id):
                 tagged = User.objects.get(id=fb.tagged_user_id)
             except User.DoesNotExist:
                 pass
+
+        doc = Document.objects.select_related('creator').get(id=doc_id)
+
+        # Email: feedback requested (tagged user)
+        if tagged:
+            try:
+                email_utils.notify_feedback_requested(doc, request.user.name, fb.comment, tagged)
+            except Exception:
+                pass
+
+        # Email: feedback added (notify creator, unless creator is the one commenting)
+        try:
+            if doc.creator and doc.creator.id != request.user.id:
+                email_utils.notify_feedback_added(doc, request.user.name, fb.comment, doc.creator)
+        except Exception:
+            pass
+
         return Response({
             'id': fb.id, 'comment': fb.comment,
             'tagged_user': {'id': tagged.id, 'name': tagged.name} if tagged else None,
@@ -689,6 +849,9 @@ def upload_version(request, doc_id):
     except Document.DoesNotExist:
         return Response({'error': 'Not found'}, status=404)
 
+    if not _can_edit_doc(request.user, doc):
+        return Response({'error': 'You do not have permission to create a new version of this document.'}, status=403)
+
     if doc.status != 'Released':
         return Response({'error': f'Cannot create a new version — the current version (v{doc.current_version}) has not been Released yet. Status is \'{doc.status}\'. The document must complete the approval workflow and reach Released status before a new version can be created.'}, status=403)
 
@@ -706,8 +869,6 @@ def upload_version(request, doc_id):
     is_major = str(request.data.get('is_major', 'false')).lower() == 'true'
     change_label = request.data.get('change_label')
     file = request.FILES.get('file')
-    if not file:
-        return Response({'error': 'No file provided'}, status=400)
 
     parts = (doc.current_version or '1.0').split('.')
     if is_major:
@@ -715,39 +876,344 @@ def upload_version(request, doc_id):
     else:
         new_ver = f'{parts[0]}.{int(parts[1] if len(parts) > 1 else 0) + 1}'
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    ext = os.path.splitext(file.name)[1].lower()
-    path = os.path.join(UPLOAD_DIR, f'{uuid.uuid4()}{ext}')
-    content = file.read()
-    with open(path, 'wb') as f:
-        f.write(content)
+    file_path = None
+    if file:
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        ext = os.path.splitext(file.name)[1].lower()
+        file_path = os.path.join(UPLOAD_DIR, f'{uuid.uuid4()}{ext}')
+        content = file.read()
+        with open(file_path, 'wb') as f:
+            f.write(content)
+        DocumentFile.objects.create(
+            document_id=doc.id, filename=file.name, file_path=file_path,
+            file_size=len(content), mime_type=file.content_type,
+            file_format=ext.lstrip('.').upper(), uploaded_by_id=request.user.id,
+        )
 
     DocumentVersion.objects.create(
         document_id=doc.id, version_number=new_ver,
         is_major=is_major, change_reason=change_reason,
         change_label=change_label, created_by_id=request.user.id,
-        file_path=path,
+        file_path=file_path,
     )
-    DocumentFile.objects.create(
-        document_id=doc.id, filename=file.name, file_path=path,
-        file_size=len(content), mime_type=file.content_type,
-        file_format=ext.lstrip('.').upper(), uploaded_by_id=request.user.id,
-    )
+
+    # Move the document back to Draft and clear the previous workflow so the
+    # initiator can launch a fresh approval workflow for the new version.
     doc.current_version = new_ver
-    doc.save(update_fields=['current_version'])
+    doc.status = 'Draft'
+    doc.save(update_fields=['current_version', 'status'])
+
+    try:
+        old_wf = doc.workflow
+        old_wf.tasks.all().delete()
+        old_wf.levels.all().delete()
+        old_wf.delete()
+    except Exception:
+        pass
+
     AuditLog.objects.create(
         document_id=doc.id, user_id=request.user.id,
         action=f'New Version v{new_ver}', note=change_reason,
     )
-    return Response({'message': f'Version {new_ver} uploaded'})
+    return Response({'message': f'Version {new_ver} uploaded — status reset to Draft. Initiate the approval workflow when ready.'})
+
+
+@api_view(['GET', 'PUT'])
+@parser_classes([JSONParser])
+def document_editors(request, doc_id):
+    """List or replace the editors granted edit access to this document.
+    Only the document creator (or an admin) can manage the editor list."""
+    try:
+        doc = Document.objects.get(id=doc_id, is_deleted=False)
+    except Document.DoesNotExist:
+        return Response({'error': 'Document not found'}, status=404)
+
+    role = getattr(request.user, 'role', '') or ''
+    is_admin = role in ('System Admin', 'Sub Admin')
+    is_creator = (doc.creator_id == request.user.id)
+    if not (is_creator or is_admin):
+        return Response({'error': 'Only the document creator can manage editors.'}, status=403)
+
+    if request.method == 'GET':
+        return Response([
+            {'id': u.id, 'name': u.name, 'email': u.email,
+             'department': u.department, 'role': u.role}
+            for u in doc.editors.all()
+        ])
+
+    # PUT — replace the editor set
+    ids = request.data.get('editor_ids') or []
+    try:
+        ids = [int(i) for i in ids if i]
+    except Exception:
+        return Response({'error': 'editor_ids must be a list of integers'}, status=400)
+    # The creator should never appear in editors (they already have rights).
+    ids = [i for i in ids if i != doc.creator_id]
+    users_qs = User.objects.filter(id__in=ids, is_active=True)
+    doc.editors.set(users_qs)
+    AuditLog.objects.create(
+        document_id=doc.id, user_id=request.user.id,
+        action='Editors Updated',
+        note=f'{users_qs.count()} editor(s) granted edit access',
+    )
+    return Response([
+        {'id': u.id, 'name': u.name, 'email': u.email}
+        for u in users_qs
+    ])
+
+
+@api_view(['POST'])
+@parser_classes([JSONParser])
+def request_edit_access(request, doc_id):
+    """A non-editor authenticated user requests edit access on this document.
+    Logged in the audit trail; an email is sent to the creator if SMTP is set
+    up. The creator can then add the requester via the Editors modal."""
+    try:
+        doc = Document.objects.select_related('creator').get(id=doc_id, is_deleted=False)
+    except Document.DoesNotExist:
+        return Response({'error': 'Document not found'}, status=404)
+
+    role = getattr(request.user, 'role', '') or ''
+    is_admin = role in ('System Admin', 'Sub Admin')
+    is_creator = (doc.creator_id == request.user.id)
+    if is_creator or is_admin:
+        return Response({'error': 'You already have edit access to this document.'}, status=400)
+    if doc.editors.filter(id=request.user.id).exists():
+        return Response({'error': 'You are already a designated editor.'}, status=400)
+
+    message = (request.data.get('message') or '').strip()
+
+    # Avoid duplicate pending requests from the same user
+    existing = EditAccessRequest.objects.filter(
+        document=doc, requester=request.user, status='pending'
+    ).first()
+    if existing:
+        return Response({'message': 'You already have a pending request for this document. The owner has been re-notified.'})
+
+    EditAccessRequest.objects.create(
+        document=doc, requester=request.user, message=message, status='pending',
+    )
+
+    AuditLog.objects.create(
+        document_id=doc.id, user_id=request.user.id,
+        action='Edit Access Requested',
+        note=message or '(no message)',
+    )
+
+    # Best-effort email to the owner. Don't fail the request if SMTP is down.
+    try:
+        if doc.creator and doc.creator.email:
+            email_utils._send(
+                [doc.creator.email],
+                f'[DMS] Edit access request — {doc.doc_number or doc.title}',
+                email_utils._html(
+                    title='Edit Access Request',
+                    body_html=(
+                        f'<p>{request.user.name} ({request.user.email}) is requesting edit access to '
+                        f'<strong>{doc.doc_number or doc.title}</strong>.</p>'
+                        + (f'<p><em>Message:</em> {message}</p>' if message else '')
+                        + '<p>Open the document and use the <strong>Editors</strong> button to grant access.</p>'
+                    ),
+                    doc_number=doc.doc_number or '',
+                    doc_title=doc.title or '',
+                ),
+            )
+    except Exception:
+        pass
+
+    return Response({
+        'message': f'Request sent to {doc.creator.name if doc.creator else "the document owner"}. '
+                   f'They will be notified and can grant access via the Editors panel.',
+    })
+
+
+@api_view(['GET'])
+def incoming_access_requests(request):
+    """Pending edit-access requests on documents the current user owns."""
+    qs = (EditAccessRequest.objects
+          .filter(status='pending', document__creator=request.user, document__is_deleted=False)
+          .select_related('document', 'requester'))
+    return Response([
+        {
+            'id': r.id,
+            'document': {
+                'id': r.document.id,
+                'doc_number': r.document.doc_number,
+                'title': r.document.title,
+            },
+            'requester': {
+                'id': r.requester.id,
+                'name': r.requester.name,
+                'email': r.requester.email,
+                'department': r.requester.department,
+                'role': r.requester.role,
+            },
+            'message': r.message,
+            'created_at': _iso(r.created_at),
+        }
+        for r in qs
+    ])
+
+
+@api_view(['POST'])
+@parser_classes([JSONParser])
+def decide_access_request(request, request_id):
+    """Owner approves or denies an edit-access request.
+    POST body: { action: 'approve' | 'deny' }. Approve adds the requester
+    to the document's editors list; both actions mark the request decided."""
+    try:
+        ar = EditAccessRequest.objects.select_related('document', 'requester').get(id=request_id)
+    except EditAccessRequest.DoesNotExist:
+        return Response({'error': 'Request not found'}, status=404)
+
+    role = getattr(request.user, 'role', '') or ''
+    is_admin = role in ('System Admin', 'Sub Admin')
+    if ar.document.creator_id != request.user.id and not is_admin:
+        return Response({'error': 'Only the document owner can decide this request.'}, status=403)
+    if ar.status != 'pending':
+        return Response({'error': f'Request already {ar.status}.'}, status=400)
+
+    action = (request.data.get('action') or '').lower()
+    if action not in ('approve', 'deny'):
+        return Response({'error': 'action must be "approve" or "deny"'}, status=400)
+
+    if action == 'approve':
+        ar.document.editors.add(ar.requester)
+        ar.status = 'approved'
+        AuditLog.objects.create(
+            document_id=ar.document_id, user_id=request.user.id,
+            action='Edit Access Granted',
+            note=f'Granted to {ar.requester.name} ({ar.requester.email})',
+        )
+    else:
+        ar.status = 'denied'
+        AuditLog.objects.create(
+            document_id=ar.document_id, user_id=request.user.id,
+            action='Edit Access Denied',
+            note=f'Denied for {ar.requester.name} ({ar.requester.email})',
+        )
+
+    ar.decided_at = datetime.utcnow()
+    ar.decided_by_id = request.user.id
+    ar.save(update_fields=['status', 'decided_at', 'decided_by'])
+
+    # Best-effort email back to the requester
+    try:
+        if ar.requester.email:
+            email_utils._send(
+                [ar.requester.email],
+                f'[DMS] Edit access {ar.status} — {ar.document.doc_number or ar.document.title}',
+                email_utils._html(
+                    title=f'Edit Access {ar.status.title()}',
+                    body_html=(
+                        f'<p>Your request for edit access to '
+                        f'<strong>{ar.document.doc_number or ar.document.title}</strong> '
+                        f'was <strong>{ar.status}</strong> by {request.user.name}.</p>'
+                    ),
+                    doc_number=ar.document.doc_number or '',
+                    doc_title=ar.document.title or '',
+                ),
+            )
+    except Exception:
+        pass
+
+    return Response({'status': ar.status})
+
+
+@api_view(['POST'])
+def reassign_doc_number(request, doc_id):
+    """Admin-only: update project/USI and regenerate the doc number."""
+    if getattr(request.user, 'role', '') != 'System Admin':
+        return Response({'error': 'System Admin role required'}, status=403)
+    try:
+        doc = Document.objects.select_related('doc_type').get(id=doc_id, is_deleted=False)
+    except Document.DoesNotExist:
+        return Response({'error': 'Document not found'}, status=404)
+
+    new_project = (request.data.get('project') or '').strip() or (doc.project or 'PROJ').strip()
+    new_usi     = (request.data.get('usi_kks_code') or '').strip() or (doc.usi_kks_code or 'USI').strip()
+    type_code   = (doc.doc_type.code if doc.doc_type else 'DOC').strip()
+
+    seq = Document.objects.filter(
+        doc_type_id=doc.doc_type_id, project=new_project, usi_kks_code=new_usi
+    ).exclude(id=doc_id).count() + 1
+    new_number = f'{type_code}/{new_project}/{new_usi}/{str(seq).zfill(4)}'
+    while Document.objects.filter(doc_number=new_number).exclude(id=doc_id).exists():
+        seq += 1
+        new_number = f'{type_code}/{new_project}/{new_usi}/{str(seq).zfill(4)}'
+
+    old_number  = doc.doc_number
+    old_project = doc.project
+    old_usi     = doc.usi_kks_code
+
+    doc.project      = new_project
+    doc.usi_kks_code = new_usi
+    doc.doc_number   = new_number
+    doc.serial_no    = new_number
+    # keep custom_metadata in sync
+    cm = dict(doc.custom_metadata or {})
+    for k in ('project',):
+        if k in cm:
+            cm[k] = new_project
+    for k in ('usi', 'usi_kks_code'):
+        if k in cm:
+            cm[k] = new_usi
+    doc.custom_metadata = cm
+    doc.save(update_fields=['project', 'usi_kks_code', 'doc_number', 'serial_no', 'custom_metadata'])
+
+    AuditLog.objects.create(
+        document_id=doc_id, user_id=request.user.id,
+        action='Doc Number Reassigned',
+        note=f'Admin reassigned: {old_number} → {new_number}',
+        old_value=f'Project:{old_project}, USI:{old_usi}',
+        new_value=f'Project:{new_project}, USI:{new_usi}',
+    )
+    return Response({'doc_number': new_number, 'message': 'Document number reassigned successfully'})
+
+
+def _can_access_doc(user, doc):
+    """Authorization gate for reading document content (files / view).
+    System Admins and Sub Admins always pass. The doc creator always passes.
+    Confidential docs are otherwise restricted; non-confidential docs are
+    visible to all active authenticated users (existing behaviour)."""
+    role = getattr(user, 'role', '') or ''
+    if role in ('System Admin', 'Sub Admin'):
+        return True
+    if doc.creator_id == getattr(user, 'id', None):
+        return True
+    if getattr(doc, 'confidential', False):
+        return False
+    return True
+
+
+def _can_edit_doc(user, doc):
+    """Authorization gate for modifying a document.
+    Creator and explicitly granted editors can edit. System Admin / Sub Admin
+    always can. Everyone else is rejected."""
+    role = getattr(user, 'role', '') or ''
+    if role in ('System Admin', 'Sub Admin'):
+        return True
+    uid = getattr(user, 'id', None)
+    if doc.creator_id == uid:
+        return True
+    try:
+        if doc.editors.filter(id=uid).exists():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 @api_view(['GET'])
 def download_file(request, doc_id, file_id):
     try:
-        f = DocumentFile.objects.get(id=file_id, document_id=doc_id)
+        f = DocumentFile.objects.select_related('document').get(id=file_id, document_id=doc_id)
     except DocumentFile.DoesNotExist:
         return Response({'error': 'File not found'}, status=404)
+    if f.document and f.document.is_deleted:
+        return Response({'error': 'File not found'}, status=404)
+    if not _can_access_doc(request.user, f.document):
+        return Response({'error': 'You do not have access to this document'}, status=403)
     if not os.path.exists(f.file_path):
         return Response({'error': 'File not found on disk'}, status=404)
 
@@ -766,9 +1232,13 @@ def download_file(request, doc_id, file_id):
 @api_view(['GET'])
 def view_file(request, doc_id, file_id):
     try:
-        f = DocumentFile.objects.get(id=file_id, document_id=doc_id)
+        f = DocumentFile.objects.select_related('document').get(id=file_id, document_id=doc_id)
     except DocumentFile.DoesNotExist:
         return Response({'error': 'File not found'}, status=404)
+    if f.document and f.document.is_deleted:
+        return Response({'error': 'File not found'}, status=404)
+    if not _can_access_doc(request.user, f.document):
+        return Response({'error': 'You do not have access to this document'}, status=403)
     if not os.path.exists(f.file_path):
         return Response({'error': 'File not found on disk'}, status=404)
 
@@ -785,7 +1255,9 @@ def view_file(request, doc_id, file_id):
         }
         mime = mime_map.get(ext, 'application/octet-stream')
 
-    if not request.META.get('HTTP_RANGE'):
+    range_header = request.META.get('HTTP_RANGE', '')
+    is_initial_request = (not range_header) or range_header.replace(' ', '').startswith('bytes=0-')
+    if is_initial_request:
         AuditLog.objects.create(
             document_id=doc_id, user_id=request.user.id,
             action='File Viewed Online', note=f.filename,
@@ -808,8 +1280,11 @@ def add_file(request, doc_id):
     except Document.DoesNotExist:
         return Response({'error': 'Document not found'}, status=404)
 
-    if doc.status not in ('Draft', 'Created'):
-        return Response({'error': f'Files can only be added when the document is in Draft or Created status. Current status is \'{doc.status}\'.'}, status=403)
+    if not _can_edit_doc(request.user, doc):
+        return Response({'error': 'You do not have permission to upload files to this document.'}, status=403)
+
+    if doc.status != 'Draft':
+        return Response({'error': f'Files can only be added when the document is in Draft status. Current status is \'{doc.status}\'.'}, status=403)
 
     if doc.checked_out and doc.checked_out_by_id != request.user.id:
         try:
@@ -862,8 +1337,11 @@ def delete_file(request, doc_id, file_id):
     except Document.DoesNotExist:
         return Response({'error': 'Document not found'}, status=404)
 
-    if doc.status not in ('Draft', 'Created'):
-        return Response({'error': f'Files can only be deleted when the document is in Draft or Created status. Current status is \'{doc.status}\'.'}, status=403)
+    if not _can_edit_doc(request.user, doc):
+        return Response({'error': 'You do not have permission to delete files from this document.'}, status=403)
+
+    if doc.status != 'Draft':
+        return Response({'error': f'Files can only be deleted when the document is in Draft status. Current status is \'{doc.status}\'.'}, status=403)
 
     if doc.checked_out and doc.checked_out_by_id != request.user.id:
         try:
@@ -908,6 +1386,9 @@ def flag_deletion(request, doc_id):
             doc = Document.objects.get(id=doc_id, is_deleted=False)
         except Document.DoesNotExist:
             return Response({'error': 'Not found'}, status=404)
+
+        if doc.status == 'Released':
+            return Response({'error': 'Released documents are part of the official record and cannot be flagged for deletion.'}, status=403)
 
         try:
             wf = doc.workflow
@@ -976,3 +1457,29 @@ def file_access_stats(request, doc_id):
         'total_views': sum(s['view_count'] for s in stats.values()),
         'total_downloads': sum(s['download_count'] for s in stats.values()),
     })
+
+
+@api_view(['GET'])
+def search_users(request):
+    """Public user search — available to all authenticated users for tagging in feedback."""
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        return Response([])
+    qs = User.objects.filter(
+        is_active=True, dms_enabled=True
+    ).filter(
+        Q(name__icontains=q) | Q(sap_username__icontains=q) |
+        Q(employee_id__icontains=q) | Q(email__icontains=q) |
+        Q(department__icontains=q)
+    ).exclude(id=request.user.id)[:20]
+    return Response([
+        {
+            'id': u.id,
+            'name': u.name,
+            'email': u.email,
+            'department': u.department,
+            'role': u.role,
+            'sap_username': u.sap_username,
+        }
+        for u in qs
+    ])

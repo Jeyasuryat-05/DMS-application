@@ -164,7 +164,13 @@ export default function Documents() {
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         {loading
           ? <Spinner />
-          : <Table columns={columns} rows={docs} onRowClick={row => nav(`/documents/${row.id}`)} />
+          : <Table columns={columns} rows={docs} onRowClick={row => {
+              const v = row.current_version
+              nav(
+                `/documents/${row.id}` + (v ? `?v=${encodeURIComponent(v)}` : ''),
+                { state: { from: '/documents' } },
+              )
+            }} />
         }
       </Card>
 

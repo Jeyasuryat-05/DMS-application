@@ -1,5 +1,6 @@
 import os, uuid, traceback
 from datetime import datetime
+from django.db import models
 from django.http import FileResponse
 from django.db import transaction
 from rest_framework.decorators import api_view, parser_classes
@@ -10,6 +11,7 @@ from api.models import (
     Document, WorkflowInstance, WorkflowLevel, WorkflowTask,
     AuditLog, WorkflowHistorySnapshot, User,
 )
+from api import email_utils
 
 STATUS_MAP = {
     'Prepare':  ('05', 'Draft'),
@@ -75,11 +77,16 @@ def _save_wf_snapshot(doc, wf, outcome, rejection_note=''):
 
 @api_view(['GET'])
 def my_inbox(request):
-    task_wf_ids = WorkflowTask.objects.filter(
-        assignee_id=request.user.id, status='Pending'
+    # Only surface tasks whose step matches the workflow's CURRENT step.
+    # Future steps (e.g. an Approver waiting on the Checker) must not appear yet.
+    active_task_wf_ids = WorkflowTask.objects.filter(
+        assignee_id=request.user.id,
+        status='Pending',
+        step=models.F('workflow__current_step'),
+        workflow__completed=False,
     ).values_list('workflow_id', flat=True)
     doc_ids = WorkflowInstance.objects.filter(
-        id__in=task_wf_ids, completed=False
+        id__in=active_task_wf_ids
     ).values_list('document_id', flat=True)
     docs = Document.objects.filter(id__in=doc_ids).select_related('doc_type', 'workflow')
     from api.views.document_views import _doc_to_dict
@@ -107,8 +114,90 @@ def initiate_workflow(request, doc_id):
     except Document.DoesNotExist:
         return Response({'error': 'Document not found'}, status=404)
 
-    if doc.status not in ('Draft', 'Created'):
-        return Response({'error': 'Only Draft or Created documents can start a workflow'}, status=400)
+    data = request.data
+    purpose = data.get('purpose', 'release')
+    if purpose not in ('release', 'archive'):
+        return Response({'error': f'Unknown workflow purpose {purpose!r}'}, status=400)
+
+    # Re-authenticate the initiator with their password (digital signature on
+    # workflow start). Mirrors the verification done at every approve/reject
+    # step.
+    password = data.get('password', '')
+    if not password:
+        return Response({'error': 'Password is required to authenticate workflow initiation (digital signature).'}, status=400)
+    import bcrypt as _bcrypt
+    stored_hash = (request.user.hashed_password or '').encode()
+    try:
+        valid = _bcrypt.checkpw(password.encode(), stored_hash)
+    except Exception:
+        valid = False
+    if not valid:
+        return Response({'error': 'Incorrect password. Please enter your login password to authenticate this action.'}, status=401)
+
+    if purpose == 'release':
+        if doc.status != 'Draft':
+            return Response({'error': 'Only Draft documents can start a release workflow'}, status=400)
+        # Block initiation if expiry or revision date is today or earlier.
+        # The author must move the dates into the future before re-initiating.
+        from datetime import date as _date
+        today = _date.today()
+        stale = []
+        if doc.expiry_date:
+            d = doc.expiry_date.date() if hasattr(doc.expiry_date, 'date') else doc.expiry_date
+            if d <= today:
+                stale.append(f'expiry date ({d.strftime("%d %b %Y")})')
+        if doc.revision_due:
+            d = doc.revision_due.date() if hasattr(doc.revision_due, 'date') else doc.revision_due
+            if d <= today:
+                stale.append(f'revision due ({d.strftime("%d %b %Y")})')
+        if stale:
+            return Response({'error': (
+                f'Cannot initiate workflow — {", and ".join(stale)} is today or has already passed. '
+                'Update the date(s) on the document and try again.'
+            )}, status=400)
+
+        # Expiry must be strictly later than revision due.
+        if doc.expiry_date and doc.revision_due:
+            _e = doc.expiry_date.date() if hasattr(doc.expiry_date, 'date') else doc.expiry_date
+            _r = doc.revision_due.date() if hasattr(doc.revision_due, 'date') else doc.revision_due
+            if _e <= _r:
+                return Response({'error': (
+                    'Cannot initiate workflow — expiry date must be later than revision due date. '
+                    'Update the dates on the document and try again.'
+                )}, status=400)
+
+        # USI (from custom_metadata or doc.usi_kks_code) must be exactly 5 digits.
+        import re as _re
+        cm = doc.custom_metadata or {}
+        usi_val = (cm.get('usi') or cm.get('usi_kks_code') or doc.usi_kks_code or '').strip()
+        if usi_val and not _re.fullmatch(r'\d{5}', usi_val):
+            return Response({'error': (
+                f'Cannot initiate workflow — USI "{usi_val}" must be exactly 5 numeric digits. '
+                'Update the USI and try again.'
+            )}, status=400)
+
+        # Generic schema-driven char / numeric length validation.
+        if doc.doc_type:
+            for f in (doc.doc_type.metadata_schema or []):
+                if not isinstance(f, dict): continue
+                ftype = f.get('type')
+                if ftype not in ('char', 'numeric'): continue
+                v = cm.get(f.get('key'))
+                if v in (None, ''): continue
+                v = str(v)
+                if ftype == 'numeric' and not _re.fullmatch(r'\d+', v):
+                    return Response({'error': f'Cannot initiate workflow — "{f.get("label")}" must contain digits only.'}, status=400)
+                if f.get('length') and len(v) != f['length']:
+                    return Response({'error': f'Cannot initiate workflow — "{f.get("label")}" must be exactly {f["length"]} {"digits" if ftype=="numeric" else "characters"}.'}, status=400)
+    else:  # archive
+        if doc.status != 'Released':
+            return Response({'error': 'Only Released documents can start an archive workflow'}, status=400)
+        obsolete_reason = (data.get('obsolete_reason') or '').strip()
+        if not obsolete_reason:
+            return Response({'error': 'Obsolete reason is mandatory when archiving a document'}, status=400)
+        # Stash on the document so the final approver can persist it.
+        doc.obsolete_reason = obsolete_reason
+        doc.save(update_fields=['obsolete_reason'])
 
     try:
         old_wf = doc.workflow
@@ -118,7 +207,6 @@ def initiate_workflow(request, doc_id):
     except Exception:
         pass
 
-    data = request.data
     mode = data.get('mode', 'Auto Populate')
     levels_input = data.get('levels', [])
     check_assignees = data.get('check_assignees', [])
@@ -134,6 +222,8 @@ def initiate_workflow(request, doc_id):
     else:
         if not levels_input:
             return Response({'error': 'User-defined workflow requires levels'}, status=400)
+        if len(levels_input) < 2:
+            return Response({'error': 'Workflow needs at least one approval level after Prepare'}, status=400)
         if len(levels_input) > 7:
             return Response({'error': 'User-defined workflow supports up to 7 levels'}, status=400)
         raw_levels = levels_input
@@ -141,11 +231,19 @@ def initiate_workflow(request, doc_id):
     wf = WorkflowInstance.objects.create(
         document_id=doc_id,
         mode=mode,
+        purpose=purpose,
         stage='Check',
         current_step=2,
         total_steps=len(raw_levels),
         completed=False,
     )
+
+    # During an archive workflow, the doc is no longer simply "Released" —
+    # show it as "In Archive" so the UI knows to lock it.
+    if purpose == 'archive':
+        doc.status = 'In Archive'
+        doc.status_code = '35'
+        doc.save(update_fields=['status', 'status_code'])
 
     assignees_by_step = {}
     if mode == 'User Defined':
@@ -201,6 +299,20 @@ def initiate_workflow(request, doc_id):
     doc.save(update_fields=['status', 'status_code'])
 
     _log(request.user, doc, 'Workflow Initiated', f'Mode: {mode}, Steps: {len(raw_levels)}')
+
+    # Email: notify step-2 (Check) assignees
+    try:
+        step2_level = wf.levels.filter(step=2).first()
+        if step2_level:
+            step2_assignees = list(User.objects.filter(
+                id__in=step2_level.tasks.values_list('assignee_id', flat=True)
+            ))
+            email_utils.notify_workflow_assigned(
+                doc, step2_level.name, step2_assignees, request.user.name
+            )
+    except Exception:
+        pass
+
     return Response({'message': 'Workflow initiated', 'stage': 'Check', 'status_code': '15'})
 
 
@@ -275,6 +387,7 @@ def workflow_action(request, doc_id):
     if action == 'reject':
         rejection_level = level.name
         rejection_note = note
+        was_archive = (wf.purpose == 'archive')
 
         _log(request.user, doc, f'Workflow Rejected at {rejection_level}', rejection_note)
         _save_wf_snapshot(doc, wf, 'rejected', rejection_note)
@@ -283,9 +396,24 @@ def workflow_action(request, doc_id):
         wf.levels.all().delete()
         wf.delete()
 
+        if was_archive:
+            # Archive workflow rejected → return to Released state, clear obsolete reason.
+            doc.status = 'Released'
+            doc.status_code = '30'
+            doc.obsolete_reason = None
+            doc.save(update_fields=['status', 'status_code', 'obsolete_reason'])
+            return Response({'message': 'Archive request rejected. Document remains Released.', 'status_code': '30'})
+
         doc.status = 'Draft'
         doc.status_code = '05'
         doc.save(update_fields=['status', 'status_code'])
+
+        # Email: notify creator of rejection
+        try:
+            creator = doc.creator
+            email_utils.notify_rejected(doc, request.user.name, rejection_level, rejection_note, creator)
+        except Exception:
+            pass
 
         return Response({'message': 'Document rejected and returned to Draft. Author can re-initiate workflow after corrections.', 'status_code': '05'})
 
@@ -304,6 +432,123 @@ def workflow_action(request, doc_id):
     next_step = wf.current_step + 1
 
     if next_step > wf.total_steps:
+        # Block release if expiry / revision dates are today or already passed.
+        # The approver must reject and ask the author to update the dates
+        # before the document can be released.
+        if wf.purpose == 'release':
+            from datetime import date as _date
+            today = _date.today()
+            stale = []
+            if doc.expiry_date:
+                d = doc.expiry_date.date() if hasattr(doc.expiry_date, 'date') else doc.expiry_date
+                if d <= today:
+                    stale.append(f'expiry date ({d.strftime("%d %b %Y")})')
+            if doc.revision_due:
+                d = doc.revision_due.date() if hasattr(doc.revision_due, 'date') else doc.revision_due
+                if d <= today:
+                    stale.append(f'revision due ({d.strftime("%d %b %Y")})')
+            if stale:
+                return Response({'error': (
+                    f'Cannot release the document — {", and ".join(stale)} is today or has already passed. '
+                    'Please reject this workflow so the author can update the date(s) and re-initiate.'
+                )}, status=400)
+
+            # Expiry must be strictly later than revision due.
+            if doc.expiry_date and doc.revision_due:
+                _e = doc.expiry_date.date() if hasattr(doc.expiry_date, 'date') else doc.expiry_date
+                _r = doc.revision_due.date() if hasattr(doc.revision_due, 'date') else doc.revision_due
+                if _e <= _r:
+                    return Response({'error': (
+                        'Cannot release the document — expiry date must be later than revision due date. '
+                        'Please reject this workflow so the author can correct the dates and re-initiate.'
+                    )}, status=400)
+
+            # USI must be exactly 5 digits.
+            import re as _re
+            cm = doc.custom_metadata or {}
+            usi_val = (cm.get('usi') or cm.get('usi_kks_code') or doc.usi_kks_code or '').strip()
+            if usi_val and not _re.fullmatch(r'\d{5}', usi_val):
+                return Response({'error': (
+                    f'Cannot release the document — USI "{usi_val}" must be exactly 5 numeric digits. '
+                    'Please reject this workflow so the author can correct the USI and re-initiate.'
+                )}, status=400)
+
+            # Generic schema-driven char / numeric checks at release.
+            if doc.doc_type:
+                for f in (doc.doc_type.metadata_schema or []):
+                    if not isinstance(f, dict): continue
+                    ftype = f.get('type')
+                    if ftype not in ('char', 'numeric'): continue
+                    v = cm.get(f.get('key'))
+                    if v in (None, ''): continue
+                    v = str(v)
+                    if ftype == 'numeric' and not _re.fullmatch(r'\d+', v):
+                        return Response({'error': f'Cannot release the document — "{f.get("label")}" must contain digits only. Please reject so the author can correct it.'}, status=400)
+                    if f.get('length') and len(v) != f['length']:
+                        return Response({'error': f'Cannot release the document — "{f.get("label")}" must be exactly {f["length"]} {"digits" if ftype=="numeric" else "characters"}. Please reject so the author can correct it.'}, status=400)
+
+        # Archive workflow path — final approval flips the doc to Archived
+        # and persists the obsolete reason captured at initiation.
+        if wf.purpose == 'archive':
+            _save_wf_snapshot(doc, wf, 'archived')
+            wf.stage = 'Archived'
+            wf.completed = True
+            wf.completed_at = datetime.utcnow()
+            wf.save(update_fields=['stage', 'completed', 'completed_at'])
+            doc.status = 'Archived'
+            doc.status_code = '90'
+            doc.archived_at = datetime.utcnow()
+            doc.archived_by_id = request.user.id
+            doc.save(update_fields=['status', 'status_code', 'archived_at', 'archived_by'])
+            _log(request.user, doc, 'Document Archived (Obsolete) — Workflow Complete',
+                 doc.obsolete_reason or '')
+            return Response({
+                'message': 'Document archived as obsolete.',
+                'status_code': '90',
+            })
+
+        # Enforce version order: every earlier DocumentVersion must already
+        # exist (i.e. be a known prior release) before this one can release.
+        # Reject if a numerically earlier version is missing — that means a
+        # higher version got created out-of-band and the system would skip
+        # over the missing predecessor.
+        from api.models import DocumentVersion
+        def _ver_key(s):
+            try:
+                return tuple(int(p) for p in str(s).split('.'))
+            except Exception:
+                return (0,)
+        current_key = _ver_key(doc.current_version)
+        earlier_versions = [
+            v for v in DocumentVersion.objects.filter(document_id=doc.id)
+            if _ver_key(v.version_number) < current_key
+        ]
+        # Find the highest earlier version actually recorded
+        if earlier_versions:
+            highest_prior = max(earlier_versions, key=lambda v: _ver_key(v.version_number))
+            # Build expected predecessor by decrementing the minor of current.
+            # E.g. current=1.3 → expected predecessor is the highest version with key < (1,3).
+            # If the highest prior is, say, 1.1 (because 1.2 was never created),
+            # there is a gap — block the release.
+            cur_major, cur_minor = current_key[0], (current_key[1] if len(current_key) > 1 else 0)
+            prior_key = _ver_key(highest_prior.version_number)
+            prior_major = prior_key[0]
+            prior_minor = prior_key[1] if len(prior_key) > 1 else 0
+            expected_ok = (
+                # immediate minor predecessor: same major, minor diff = 1
+                (prior_major == cur_major and prior_minor == cur_minor - 1)
+                # or this is a major bump (e.g. 1.4 → 2.0): predecessor must be highest minor of prior major
+                or (cur_minor == 0 and prior_major == cur_major - 1)
+            )
+            if not expected_ok:
+                return Response({
+                    'error': (
+                        f'Cannot release v{doc.current_version}: an earlier version is missing. '
+                        f'Last known prior version is v{highest_prior.version_number}. '
+                        f'Release the predecessor first, or ask an admin to reset this workflow.'
+                    )
+                }, status=400)
+
         _save_wf_snapshot(doc, wf, 'released')
         wf.stage = 'Released'
         wf.completed = True
@@ -313,6 +558,13 @@ def workflow_action(request, doc_id):
         doc.status_code = '30'
         doc.save(update_fields=['status', 'status_code'])
         _log(request.user, doc, 'Document Released (Workflow Complete)', 'Status: 30')
+
+        # Email: notify creator of release
+        try:
+            email_utils.notify_released(doc, request.user.name, doc.creator)
+        except Exception:
+            pass
+
         return Response({'message': 'Document released', 'status_code': '30'})
 
     wf.current_step = next_step
@@ -328,6 +580,17 @@ def workflow_action(request, doc_id):
     wf.save(update_fields=['current_step', 'stage'])
 
     _log(request.user, doc, f'Level {wf.current_step - 1} Approved — Advanced to Level {next_step}', '')
+
+    # Email: notify next-level assignees
+    try:
+        if next_level:
+            next_assignees = list(User.objects.filter(
+                id__in=next_level.tasks.values_list('assignee_id', flat=True)
+            ))
+            email_utils.notify_approved(doc, request.user.name, next_level.name, next_assignees)
+    except Exception:
+        pass
+
     return Response({'message': f'Advanced to {next_level.name if next_level else "next"}', 'status_code': doc.status_code})
 
 
@@ -368,11 +631,18 @@ def return_document(request, doc_id):
     wf.levels.all().delete()
     wf.delete()
 
-    doc.status = 'Created'
-    doc.status_code = '10'
+    doc.status = 'Draft'
+    doc.status_code = '05'
     doc.save(update_fields=['status', 'status_code'])
     _log(request.user, doc, 'Returned for Correction — Workflow Reset', note)
-    return Response({'message': 'Workflow reset. Document returned to Created status. You can now re-initiate the workflow.'})
+
+    # Email: notify creator
+    try:
+        email_utils.notify_returned(doc, request.user.name, note, doc.creator)
+    except Exception:
+        pass
+
+    return Response({'message': 'Workflow reset. Document returned to Draft status. You can now re-initiate the workflow.'})
 
 
 @api_view(['POST'])
@@ -466,11 +736,8 @@ def submit_document(request, doc_id):
         return Response({'error': 'Document not found'}, status=404)
     if doc.status != 'Draft':
         return Response({'error': 'Only Draft documents can be submitted'}, status=400)
-    doc.status = 'Created'
-    doc.status_code = '10'
-    doc.save(update_fields=['status', 'status_code'])
-    _log(request.user, doc, 'Submitted (Created)', 'Ready for workflow initiation')
-    return Response({'message': 'Document ready for workflow', 'status_code': '10'})
+    _log(request.user, doc, 'Submitted', 'Ready for workflow initiation')
+    return Response({'message': 'Document ready for workflow', 'status_code': '05'})
 
 
 @api_view(['POST'])
@@ -590,3 +857,116 @@ def download_history_checklist(request, doc_id):
         return Response({'error': 'Checklist file not found'}, status=404)
     filename = _os.path.basename(target)
     return FileResponse(open(target, 'rb'), as_attachment=True, filename=filename)
+
+
+# ── Admin Workflow Recovery ────────────────────────────────────────────────────
+
+def _is_admin(user):
+    return bool(user.can_delete or (user.role or '').lower() in ('admin', 'administrator', 'system admin', 'dms admin'))
+
+
+@api_view(['POST'])
+@parser_classes([JSONParser])
+@transaction.atomic
+def admin_force_reset(request, doc_id):
+    """Admin: completely reset a stuck workflow → document goes back to Created."""
+    if not _is_admin(request.user):
+        return Response({'error': 'Admin access required'}, status=403)
+    try:
+        doc = Document.objects.get(id=doc_id)
+    except Document.DoesNotExist:
+        return Response({'error': 'Document not found'}, status=404)
+
+    note = request.data.get('note', 'Admin force-reset').strip() or 'Admin force-reset'
+
+    try:
+        wf = doc.workflow
+        _save_wf_snapshot(doc, wf, 'force_reset', note)
+        wf.tasks.all().delete()
+        wf.levels.all().delete()
+        wf.delete()
+    except Exception:
+        pass
+
+    doc.status = 'Draft'
+    doc.status_code = '05'
+    doc.save(update_fields=['status', 'status_code'])
+    _log(request.user, doc, 'Admin: Workflow Force-Reset', note)
+    return Response({'message': 'Workflow reset. Document is now in Draft status and can be re-initiated.'})
+
+
+@api_view(['POST'])
+@parser_classes([JSONParser])
+@transaction.atomic
+def admin_reassign(request, doc_id):
+    """Admin: replace all pending tasks at the current step with a new assignee."""
+    if not _is_admin(request.user):
+        return Response({'error': 'Admin access required'}, status=403)
+    try:
+        doc = Document.objects.get(id=doc_id)
+        wf = doc.workflow
+    except Exception:
+        return Response({'error': 'Workflow not found'}, status=404)
+
+    if wf.completed:
+        return Response({'error': 'Workflow is already completed'}, status=400)
+
+    new_assignee_id = request.data.get('assignee_id')
+    if not new_assignee_id:
+        return Response({'error': 'assignee_id is required'}, status=400)
+
+    try:
+        new_user = User.objects.get(id=int(new_assignee_id))
+    except User.DoesNotExist:
+        return Response({'error': 'User not found'}, status=404)
+
+    step = wf.current_step
+    level = wf.levels.filter(step=step).first()
+    if not level:
+        return Response({'error': f'No level found for step {step}'}, status=400)
+
+    old_assignees = list(
+        wf.tasks.filter(step=step, status='Pending')
+        .select_related('assignee')
+        .values_list('assignee__name', flat=True)
+    )
+    wf.tasks.filter(step=step, status='Pending').delete()
+
+    WorkflowTask.objects.create(
+        workflow_id=wf.id, level_id=level.id,
+        step=step, assignee_id=new_user.id, status='Pending',
+    )
+    old_str = ', '.join(filter(None, old_assignees)) or 'unassigned'
+    _log(request.user, doc, f'Admin: Reassigned Step {step}',
+         f'Replaced [{old_str}] → {new_user.name}')
+    return Response({'message': f'Step {step} reassigned to {new_user.name}'})
+
+
+@api_view(['POST'])
+@parser_classes([JSONParser])
+@transaction.atomic
+def admin_fix_status(request, doc_id):
+    """Admin: fix document status when it is out of sync with the workflow."""
+    if not _is_admin(request.user):
+        return Response({'error': 'Admin access required'}, status=403)
+    try:
+        doc = Document.objects.get(id=doc_id)
+    except Document.DoesNotExist:
+        return Response({'error': 'Document not found'}, status=404)
+
+    try:
+        wf = doc.workflow
+        if wf.completed:
+            correct_status, correct_code = 'Released', '30'
+        else:
+            correct_status, correct_code = STATUS_MAP.get(wf.stage, ('05', 'Draft'))
+    except Exception:
+        correct_status, correct_code = 'Draft', '05'
+
+    old_status = doc.status
+    doc.status = correct_status
+    doc.status_code = correct_code
+    doc.save(update_fields=['status', 'status_code'])
+    _log(request.user, doc, 'Admin: Status Fixed',
+         f'{old_status} → {correct_status}')
+    return Response({'message': f'Status corrected: {old_status} → {correct_status}'})

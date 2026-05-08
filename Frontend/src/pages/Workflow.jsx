@@ -14,7 +14,6 @@ const C = { blue:'#0C447C', accent:'#185FA5', green:'#0F6E56', red:'#A32D2D',
 
 const STATUS_META = {
   '05':{ label:'Draft',       color:'#9ca3af', bg:'#f9fafb' },
-  '10':{ label:'Created',     color:C.accent,  bg:'#E6F1FB' },
   '15':{ label:'In Check',    color:C.amber,   bg:'#FAEEDA' },
   '20':{ label:'In Review',   color:C.purple,  bg:'#EEEDFE' },
   '25':{ label:'In Approval', color:C.green,   bg:'#E1F5EE' },
@@ -273,22 +272,37 @@ export default function Workflow() {
   const [pending, setPending] = useState([])
   const [loading, setLoading] = useState(true)
 
+  const isAdmin = ['System Admin', 'Sub Admin'].includes(user?.role)
+
   useEffect(() => {
     setLoading(true)
-    Promise.all([workflowAPI.inbox(), workflowAPI.pending()])
-      .then(([i,p]) => { setInbox(i.data); setPending(p.data) })
+    const calls = isAdmin
+      ? [workflowAPI.inbox(), workflowAPI.pending()]
+      : [workflowAPI.inbox()]
+    Promise.all(calls)
+      .then(results => {
+        setInbox(results[0].data)
+        setPending(results[1]?.data || [])
+      })
       .finally(() => setLoading(false))
-  }, [])
+  }, [isAdmin])
 
   const STAGE_ORDER = ['Check','Review','Approve']
   const stageCount = s => pending.filter(d => d.workflow?.stage === s).length
 
   const TABS = [
     { id:'inbox',   label:`My Inbox (${inbox.length})` },
-    { id:'all',     label:`All Pending (${pending.length})` },
-    { id:'kanban',  label:'Kanban View' },
+    ...(isAdmin ? [
+      { id:'all',     label:`All Pending (${pending.length})` },
+      { id:'kanban',  label:'Kanban View' },
+    ] : []),
     { id:'alerts',  label:'Expiry Alerts 🔔' },
   ]
+
+  // Reset to inbox if a non-admin landed on a now-hidden tab
+  useEffect(() => {
+    if (!isAdmin && (tab === 'all' || tab === 'kanban')) setTab('inbox')
+  }, [isAdmin, tab])
 
   return (
     <div style={{ padding:'28px 32px', fontFamily:'system-ui,-apple-system,sans-serif' }}>
@@ -303,11 +317,16 @@ export default function Workflow() {
       </div>
 
       {/* Stage summary metrics */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10, marginBottom:24 }}>
-        {[['Draft (05)',0,'#9ca3af'],['In Check (15)',stageCount('Check'),C.amber],
+      <div style={{ display:'grid', gridTemplateColumns: isAdmin ? 'repeat(5,1fr)' : 'repeat(1,1fr)', gap:10, marginBottom:24 }}>
+        {(isAdmin ? [
+          ['Draft (05)',0,'#9ca3af'],
+          ['In Check (15)',stageCount('Check'),C.amber],
           ['In Review (20)',stageCount('Review'),C.purple],
           ['In Approval (25)',stageCount('Approve'),C.green],
-          ['My Tasks',inbox.length,C.blue]].map(([l,v,c])=>(
+          ['My Tasks',inbox.length,C.blue],
+        ] : [
+          ['My Tasks',inbox.length,C.blue],
+        ]).map(([l,v,c])=>(
           <div key={l} style={{ background:'#f9fafb', borderRadius:10, padding:'1rem', textAlign:'center', border:`1px solid #f0f0f0` }}>
             <div style={{ fontSize:11, color:'#6b7280', marginBottom:4, textTransform:'uppercase', letterSpacing:0.3 }}>{l}</div>
             <div style={{ fontSize:24, fontWeight:700, color:c }}>{v}</div>

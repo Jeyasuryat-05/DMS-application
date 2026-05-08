@@ -50,7 +50,11 @@ def summary(request):
 def by_status(request):
     try:
         rows = Document.objects.filter(is_deleted=False).values('status').annotate(count=Count('id'))
-        return Response([{'status': r['status'], 'count': r['count']} for r in rows])
+        merged = {}
+        for r in rows:
+            label = 'Draft' if r['status'] in ('Draft', 'Created') else r['status']
+            merged[label] = merged.get(label, 0) + r['count']
+        return Response([{'status': k, 'count': v} for k, v in merged.items()])
     except Exception:
         return Response([])
 
@@ -80,12 +84,12 @@ def by_type_status(request):
         statuses = set()
         for row in rows:
             doc_type = row['doc_type__name']
-            status = row['status']
+            status = 'Draft' if row['status'] in ('Draft', 'Created') else row['status']
             count = row['count']
             statuses.add(status)
             if doc_type not in pivot:
                 pivot[doc_type] = {'type': doc_type}
-            pivot[doc_type][status] = count
+            pivot[doc_type][status] = pivot[doc_type].get(status, 0) + count
         return Response({'data': list(pivot.values()), 'statuses': sorted(statuses)})
     except Exception:
         return Response({'data': [], 'statuses': []})

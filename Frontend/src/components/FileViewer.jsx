@@ -1,7 +1,7 @@
 /**
- * FileViewer.jsx — Universal in-browser file viewer with PDF conversion
+ * FileViewer.jsx — Universal in-browser file viewer
  *
- * Native rendering (no conversion):
+ * Native rendering:
  *   PDF, PNG/JPG/TIFF/BMP/GIF/WEBP/SVG → browser native
  *   MP4/WEBM/OGG → HTML5 video
  *   MP3/WAV       → HTML5 audio
@@ -9,12 +9,7 @@
  *   DXF           → HTML5 Canvas CAD renderer (lines, arcs, circles, polylines, text)
  *   STL / OBJ     → Three.js 3D renderer
  *
- * Server-side PDF conversion (all others):
- *   DOCX/DOC, XLSX/XLS, PPTX/PPT → python-docx / openpyxl / reportlab
- *   DWG, STP/STEP/IGES            → LibreOffice headless (if installed)
- *   Any other format              → LibreOffice fallback
- *
- * The converted PDF is cached on the server — subsequent views are instant.
+ * All other formats show a download prompt.
  */
 import { useState, useEffect, useRef } from 'react'
 
@@ -258,35 +253,6 @@ function ThreeDViewer({ url, ext }) {
   )
 }
 
-// ─── PDF Conversion Viewer ────────────────────────────────────────────────────
-function PdfConvertViewer({ fileId, token, filename }) {
-  const [loaded, setLoaded] = useState(false)
-  const pdfUrl = `/api/convert/files/${fileId}/pdf?token=${encodeURIComponent(token)}`
-
-  // Load iframe directly — no probe fetch (probe would log a duplicate view count)
-  return (
-    <div style={{width:'100%',height:'100%',position:'relative',background:'#111'}}>
-      {!loaded && (
-        <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',
-          alignItems:'center',justifyContent:'center',gap:16,background:'#111',zIndex:1}}>
-          <div style={{width:48,height:48,border:'4px solid #185FA5',
-            borderTopColor:'transparent',borderRadius:'50%',
-            animation:'spin 0.8s linear infinite'}} />
-          <div style={{color:'#9ca3af',fontSize:14}}>Converting {filename} to PDF…</div>
-          <div style={{color:'#6b7280',fontSize:12}}>This may take a few seconds</div>
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-        </div>
-      )}
-      <iframe
-        src={pdfUrl}
-        onLoad={() => setLoaded(true)}
-        style={{width:'100%',height:'100%',border:'none'}}
-        title={filename}
-      />
-    </div>
-  )
-}
-
 // ─── Main FileViewer ───────────────────────────────────────────────────────────
 export default function FileViewer({ file, docId, onClose }) {
   const [textContent, setTextContent] = useState('')
@@ -295,7 +261,7 @@ export default function FileViewer({ file, docId, onClose }) {
   const token   = localStorage.getItem('dms_token') || ''
   const viewUrl = `/api/documents/${docId}/files/${file.id}/view?token=${encodeURIComponent(token)}`
   const ext     = getExt(file.filename, file.file_format)
-  const viewType = NATIVE[ext] || 'convert'  // default to server PDF conversion
+  const viewType = NATIVE[ext] || 'unsupported'
 
   const fileSize = file.file_size ? `${(file.file_size/1024).toFixed(0)} KB` : ''
 
@@ -336,7 +302,6 @@ export default function FileViewer({ file, docId, onClose }) {
           <div style={{color:'rgba(255,255,255,0.55)',fontSize:11,marginTop:2}}>
             {FORMAT_LABELS[ext] || ext.toUpperCase()}
             {fileSize && ` · ${fileSize}`}
-            {viewType==='convert' && ' · Converting to PDF for preview'}
             {viewType==='dxf'    && ' · Rendered natively (Canvas)'}
             {viewType==='3d'     && ' · Rendered natively (Three.js)'}
           </div>
@@ -405,13 +370,13 @@ export default function FileViewer({ file, docId, onClose }) {
 
         {viewType==='3d' && <ThreeDViewer url={viewUrl} ext={ext} />}
 
-        {/* ALL other formats → server-side PDF conversion */}
-        {viewType==='convert' && (
-          <PdfConvertViewer
-            fileId={file.id}
-            token={token}
-            filename={file.filename}
-          />
+        {viewType==='unsupported' && (
+          <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',
+            alignItems:'center',justifyContent:'center',gap:16,color:'#9ca3af'}}>
+            <div style={{fontSize:48}}>📄</div>
+            <div style={{fontSize:16,fontWeight:600,color:'#d1d5db'}}>Preview not available</div>
+            <div style={{fontSize:13}}>Use the Download button to open this file.</div>
+          </div>
         )}
       </div>
 
@@ -419,7 +384,6 @@ export default function FileViewer({ file, docId, onClose }) {
       <div style={{background:'#0a2d52',padding:'6px 20px',flexShrink:0,
         display:'flex',alignItems:'center',justifyContent:'space-between'}}>
         <div style={{color:'rgba(255,255,255,0.4)',fontSize:11}}>
-          {viewType==='convert' && 'Converted to PDF on server · Cached for fast repeat viewing · No external app needed'}
           {viewType==='dxf'    && '2D CAD — lines, arcs, circles, polylines, text rendered on HTML5 Canvas'}
           {viewType==='3d'     && '3D model rendered by Three.js · STL (binary+ASCII) and OBJ supported'}
           {viewType==='pdf'    && 'PDF rendered natively by browser'}

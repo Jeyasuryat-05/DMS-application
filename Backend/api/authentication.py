@@ -54,6 +54,12 @@ def set_cfg(key: str, value: str):
 
 
 class JWTAuthentication(BaseAuthentication):
+    # Endpoints that may receive the JWT via ?token= query string.
+    # Required because <iframe>/<video>/<img> tags can't attach Authorization
+    # headers, but the security trade-off is JWTs leaking into server logs and
+    # referers — so allow it ONLY for these read-only file endpoints.
+    _QUERY_TOKEN_PATH_FRAGMENTS = ('/files/', '/uploads/')
+
     def authenticate(self, request):
         from api.models import User
         token = None
@@ -61,7 +67,9 @@ class JWTAuthentication(BaseAuthentication):
         if auth_header.startswith('Bearer '):
             token = auth_header[7:].strip()
         if not token:
-            token = request.GET.get('token') or request.query_params.get('token', '')
+            path = request.path or ''
+            if any(frag in path for frag in self._QUERY_TOKEN_PATH_FRAGMENTS):
+                token = request.GET.get('token') or request.query_params.get('token', '')
         if not token:
             return None
         try:

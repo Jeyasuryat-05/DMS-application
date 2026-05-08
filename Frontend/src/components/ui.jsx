@@ -5,6 +5,8 @@ const STATUS_COLORS = {
   'Draft':        { bg: '#EAF3DE', text: '#3B6D11', border: '#639922' },
   'Under Review': { bg: '#FAEEDA', text: '#854F0B', border: '#EF9F27' },
   'Approved':     { bg: '#E1F5EE', text: '#0F6E56', border: '#1D9E75' },
+  'Released':     { bg: '#E1F5EE', text: '#0F6E56', border: '#1D9E75' },
+  'Superseded':   { bg: '#F1EFE8', text: '#5F5E5A', border: '#B4B2A9' },
   'Rejected':     { bg: '#FCEBEB', text: '#A32D2D', border: '#E24B4A' },
   'Archived':     { bg: '#F1EFE8', text: '#5F5E5A', border: '#888780' },
   'Expired':      { bg: '#FAECE7', text: '#993C1D', border: '#D85A30' },
@@ -374,23 +376,29 @@ export function Tabs({ tabs, active, onChange }) {
 }
 
 // ─── Workflow pipeline bar ────────────────────────────────────────────────────
-export function WorkflowBar({ stage, completed }) {
-  const stages = ['Prepare', 'Check', 'Review', 'Approve']
-  const idx = stages.indexOf(stage)
+export function WorkflowBar({ stage, completed, levels, current_step }) {
+  // If levels are provided, render one node per level (custom workflows).
+  // Otherwise fall back to the default 4-step Prepare/Check/Review/Approve.
+  const items = Array.isArray(levels) && levels.length > 0
+    ? levels.map(lv => lv.name)
+    : ['Prepare', 'Check', 'Review', 'Approve']
+  const idx = Array.isArray(levels) && levels.length > 0
+    ? Math.max(0, (current_step ?? 1) - 1)
+    : items.indexOf(stage)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      {stages.map((s, i) => {
+      {items.map((s, i) => {
         const done = completed || i < idx
         const current = !completed && i === idx
         return (
-          <div key={s} style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+          <div key={`${s}-${i}`} style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
             <div style={{
               flex: 1, textAlign: 'center', padding: '5px 4px', borderRadius: 6, fontSize: 11, fontWeight: 500,
               background: done ? '#E1F5EE' : current ? '#185FA5' : '#f9fafb',
               color: done ? '#0F6E56' : current ? '#fff' : '#9ca3af',
               border: done ? '1px solid #1D9E75' : current ? 'none' : '1px solid #e5e7eb',
             }}>{done ? '✓ ' : ''}{s}</div>
-            {i < 3 && <div style={{ width: 16, height: 2, background: done ? '#1D9E75' : '#e5e7eb' }} />}
+            {i < items.length - 1 && <div style={{ width: 16, height: 2, background: done ? '#1D9E75' : '#e5e7eb' }} />}
           </div>
         )
       })}

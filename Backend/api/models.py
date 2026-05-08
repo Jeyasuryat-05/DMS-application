@@ -8,7 +8,6 @@ class SystemConfig(models.Model):
 
     class Meta:
         db_table = 'system_config'
-        managed  = False
 
 
 class Role(models.Model):
@@ -18,7 +17,6 @@ class Role(models.Model):
 
     class Meta:
         db_table = 'roles'
-        managed  = False
 
 
 class User(models.Model):
@@ -44,7 +42,6 @@ class User(models.Model):
 
     class Meta:
         db_table = 'users'
-        managed  = False
 
 
 class DocumentType(models.Model):
@@ -56,12 +53,40 @@ class DocumentType(models.Model):
     metadata_schema = models.JSONField(default=dict)
     number_pattern  = models.CharField(max_length=200, default='{CODE}-{YEAR}-{SEQ}')
     is_active       = models.BooleanField(default=True)
+    is_structure_folder = models.BooleanField(default=False)
     created_at      = models.DateTimeField(auto_now_add=True)
     parent          = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='children', db_column='parent_id')
+    extra_parents   = models.ManyToManyField('self', symmetrical=False, blank=True, related_name='extra_children')
 
     class Meta:
         db_table = 'document_types'
-        managed  = False
+
+
+class UserFolder(models.Model):
+    """A library folder. Owned by a user (private) or NULL (admin template, visible to all)."""
+    name        = models.CharField(max_length=200)
+    description = models.TextField(blank=True, default='')
+    owner       = models.ForeignKey('User', null=True, blank=True, on_delete=models.CASCADE,
+                                    related_name='library_folders', db_column='owner_id')
+    parent      = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE,
+                                    related_name='children', db_column='parent_id')
+    doc_types   = models.ManyToManyField(DocumentType, blank=True, related_name='pinned_in_folders',
+                                         through='UserFolderDocType')
+    is_active   = models.BooleanField(default=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'user_folders'
+
+
+class UserFolderDocType(models.Model):
+    folder    = models.ForeignKey(UserFolder, on_delete=models.CASCADE, db_column='folder_id')
+    doc_type  = models.ForeignKey(DocumentType, on_delete=models.CASCADE, db_column='doc_type_id')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'user_folder_doc_types'
+        unique_together = (('folder', 'doc_type'),)
 
 
 class DocTypeFileFormat(models.Model):
@@ -73,7 +98,6 @@ class DocTypeFileFormat(models.Model):
 
     class Meta:
         db_table = 'doc_type_file_formats'
-        managed  = False
 
 
 class WorkflowConfig(models.Model):
@@ -82,7 +106,6 @@ class WorkflowConfig(models.Model):
 
     class Meta:
         db_table = 'workflow_configs'
-        managed  = False
 
 
 class AlertConfig(models.Model):
@@ -94,7 +117,23 @@ class AlertConfig(models.Model):
 
     class Meta:
         db_table = 'alert_configs'
-        managed  = False
+
+
+class EditAccessRequest(models.Model):
+    """A user requests edit access on a document; owner approves or denies."""
+    STATUS_CHOICES = [('pending', 'Pending'), ('approved', 'Approved'), ('denied', 'Denied')]
+    document   = models.ForeignKey('Document', on_delete=models.CASCADE, related_name='access_requests')
+    requester  = models.ForeignKey('User', on_delete=models.CASCADE, related_name='access_requests_made')
+    message    = models.TextField(blank=True, default='')
+    status     = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey('User', on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='access_requests_decided', db_column='decided_by_id')
+
+    class Meta:
+        db_table = 'edit_access_requests'
+        ordering = ['-created_at']
 
 
 class Document(models.Model):
@@ -125,12 +164,16 @@ class Document(models.Model):
                                         related_name='created_docs', db_column='creator_id')
     responsible_person = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
                                            related_name='responsible_docs', db_column='responsible_person_id')
+    editors         = models.ManyToManyField(User, blank=True, related_name='editable_docs')
     custom_metadata = models.JSONField(default=dict)
     tags            = models.JSONField(default=list)
+    obsolete_reason = models.TextField(null=True, blank=True)
+    archived_at     = models.DateTimeField(null=True, blank=True)
+    archived_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                        related_name='archived_docs', db_column='archived_by_id')
 
     class Meta:
         db_table = 'documents'
-        managed  = False
 
 
 class DocumentVersion(models.Model):
@@ -145,7 +188,6 @@ class DocumentVersion(models.Model):
 
     class Meta:
         db_table = 'document_versions'
-        managed  = False
 
 
 class DocumentFile(models.Model):
@@ -160,7 +202,6 @@ class DocumentFile(models.Model):
 
     class Meta:
         db_table = 'document_files'
-        managed  = False
 
 
 class DocumentReference(models.Model):
@@ -170,7 +211,6 @@ class DocumentReference(models.Model):
 
     class Meta:
         db_table = 'document_references'
-        managed  = False
 
 
 class DocumentFeedback(models.Model):
@@ -183,7 +223,6 @@ class DocumentFeedback(models.Model):
 
     class Meta:
         db_table = 'document_feedback'
-        managed  = False
 
 
 class AuditLog(models.Model):
@@ -198,7 +237,6 @@ class AuditLog(models.Model):
 
     class Meta:
         db_table = 'audit_logs'
-        managed  = False
 
 
 class FileAccessLog(models.Model):
@@ -210,7 +248,6 @@ class FileAccessLog(models.Model):
 
     class Meta:
         db_table = 'file_access_logs'
-        managed  = False
 
 
 class WorkflowHistorySnapshot(models.Model):
@@ -225,12 +262,12 @@ class WorkflowHistorySnapshot(models.Model):
 
     class Meta:
         db_table = 'workflow_history_snapshots'
-        managed  = False
 
 
 class WorkflowInstance(models.Model):
     document         = models.OneToOneField(Document, on_delete=models.CASCADE, related_name='workflow')
     mode             = models.CharField(max_length=30, default='Auto Populate')
+    purpose          = models.CharField(max_length=20, default='release')  # 'release' | 'archive'
     stage            = models.CharField(max_length=30, default='Prepare')
     current_step     = models.IntegerField(default=1)
     total_steps      = models.IntegerField(default=4)
@@ -242,7 +279,6 @@ class WorkflowInstance(models.Model):
 
     class Meta:
         db_table = 'workflow_instances'
-        managed  = False
 
 
 class WorkflowLevel(models.Model):
@@ -258,7 +294,6 @@ class WorkflowLevel(models.Model):
 
     class Meta:
         db_table = 'workflow_levels'
-        managed  = False
         ordering = ['step']
 
 
@@ -279,7 +314,6 @@ class WorkflowTask(models.Model):
 
     class Meta:
         db_table = 'workflow_tasks'
-        managed  = False
         ordering = ['step']
 
 
@@ -292,7 +326,6 @@ class AlertLog(models.Model):
 
     class Meta:
         db_table = 'alert_logs'
-        managed  = False
 
 
 class AlertRecipient(models.Model):
@@ -303,7 +336,6 @@ class AlertRecipient(models.Model):
 
     class Meta:
         db_table = 'alert_recipients'
-        managed  = False
 
 
 class NumberReservation(models.Model):
@@ -317,4 +349,3 @@ class NumberReservation(models.Model):
 
     class Meta:
         db_table = 'number_reservations'
-        managed  = False

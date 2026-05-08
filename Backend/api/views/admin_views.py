@@ -3,8 +3,9 @@ from datetime import datetime, timedelta
 from django.http import StreamingHttpResponse
 from django.db import transaction
 from django.db.models import Q
-from rest_framework.decorators import api_view, parser_classes
+from rest_framework.decorators import api_view, parser_classes, authentication_classes, permission_classes
 from rest_framework.parsers import JSONParser
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from api.models import (
@@ -66,6 +67,9 @@ def _dt_to_dict(dt):
         'metadata_schema': dt.metadata_schema,
         'number_pattern': dt.number_pattern,
         'is_active': dt.is_active,
+        'is_structure_folder': dt.is_structure_folder,
+        'parent_id': dt.parent_id,
+        'extra_parent_ids': list(dt.extra_parents.values_list('id', flat=True)),
         'created_at': _iso(dt.created_at),
         'allowed_formats': fmts,
     }
@@ -165,10 +169,21 @@ def user_detail(request, user_id):
 
     if request.method == 'PUT':
         data = request.data
+        # Whitelist of fields an admin is permitted to edit on a user. Any
+        # other key in the payload (`hashed_password`, `is_superuser`,
+        # internal Django flags, `id`, etc.) is silently ignored to prevent
+        # privilege escalation via mass-assignment.
+        ALLOWED_FIELDS = {
+            'name', 'email', 'department', 'role', 'sap_username',
+            'employee_id', 'auth_codes',
+            'dms_enabled', 'can_create', 'can_edit', 'can_delete', 'can_read',
+            'is_active', 'profile_picture',
+        }
         for k, v in data.items():
             if k == 'password' and v:
                 user.hashed_password = hash_password(v)
-            elif hasattr(user, k):
+                continue
+            if k in ALLOWED_FIELDS and hasattr(user, k):
                 setattr(user, k, v)
         user.save()
         return Response(_user_to_dict(user))
@@ -195,7 +210,13 @@ def activate_user(request, user_id):
 @parser_classes([JSONParser])
 def document_types(request):
     if request.method == 'GET':
+        # Admin → Document Types lists real doc types only.
+        # Structure folders (org / department containers) live under the Library,
+        # not under the doc-types catalogue.
+        include_structure = request.query_params.get('include_structure') == 'true'
         dts = DocumentType.objects.all()
+        if not include_structure:
+            dts = dts.filter(is_structure_folder=False)
         return Response([_dt_to_dict(dt) for dt in dts])
 
     if not _require_admin(request):
@@ -210,6 +231,7 @@ def document_types(request):
             auth_code=data.get('auth_code', ''),
             metadata_schema=data.get('metadata_schema', {}),
             number_pattern=data.get('number_pattern', '{CODE}-{YEAR}-{SEQ}'),
+            parent_id=data.get('parent_id') or None,
         )
         for f in (data.get('allowed_formats') or []):
             DocTypeFileFormat.objects.create(
@@ -392,12 +414,20 @@ except Exception as _e:
 
 
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 @parser_classes([JSONParser])
 def seed_data(request):
     force = str(request.query_params.get('force', 'false')).lower() == 'true'
     user_count = User.objects.count()
-    if user_count > 0 and not request.user.role == 'System Admin':
-        return Response({'error': 'System Admin role required'}, status=403)
+    if user_count > 0:
+        from api.authentication import JWTAuthentication
+        try:
+            auth_result = JWTAuthentication().authenticate(request)
+        except Exception:
+            auth_result = None
+        if not auth_result or getattr(auth_result[0], 'role', '') != 'System Admin':
+            return Response({'error': 'System Admin role required'}, status=403)
 
     try:
         existing = DocumentType.objects.count()
@@ -514,6 +544,22 @@ def run_deletion_job(request):
         return Response({'error': 'System Admin role required'}, status=403)
     result = _run_deletion_job()
     return Response({'message': f'Deletion job completed. {result["deleted"]} document(s) deleted.', **result})
+
+
+@api_view(['POST'])
+def run_auto_archive_job(request):
+    if not _require_admin(request):
+        return Response({'error': 'System Admin role required'}, status=403)
+    from api.management.commands.auto_archive_expired import auto_archive_run
+    count, doc_numbers = auto_archive_run()
+    return Response({
+        'message': (
+            f'Auto-archive job completed. {count} expired Released document(s) archived.'
+            if count else 'Auto-archive job completed. No expired Released documents found.'
+        ),
+        'archived_count': count,
+        'archived_documents': doc_numbers,
+    })
 
 
 @api_view(['GET'])

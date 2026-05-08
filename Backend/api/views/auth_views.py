@@ -1,10 +1,15 @@
 import os, base64, hashlib, pathlib, io, time, json as _json
 from datetime import datetime, timedelta
-from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from django.http import HttpResponse, HttpResponseRedirect
+
+
+class LoginRateThrottle(AnonRateThrottle):
+    scope = 'login'
 
 from api.models import User, SystemConfig
 from api.authentication import (
@@ -92,6 +97,7 @@ def verify_auth_code(request):
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 @parser_classes([FormParser, MultiPartParser, JSONParser])
 def login(request):
     gate_token = (
@@ -249,7 +255,11 @@ def sso_callback(request):
     user.last_login = datetime.utcnow()
     user.save()
     token = create_token(user.id, {'sso': True})
-    frontend_url = cfg('frontend_url', 'http://localhost:3000')
+    # Only allow http(s) URLs as the postMessage / redirect target. Without
+    # this check a misconfiguration could land a javascript: URI here, turning
+    # the SSO callback into a stored-XSS sink.
+    raw_frontend_url = cfg('frontend_url', 'http://localhost:3000') or ''
+    frontend_url = raw_frontend_url if raw_frontend_url.lower().startswith(('http://', 'https://')) else 'http://localhost:3000'
     token_json = _json.dumps(token)
     user_json = _json.dumps({
         'id': user.id, 'name': user.name, 'email': user.email,

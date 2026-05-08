@@ -4,7 +4,7 @@
  * Auto Populate (4-step default) | User Defined (custom levels)
  */
 import { useState, useEffect, useRef } from 'react'
-import { adminAPI, workflowAPI } from '../api'
+import { adminAPI, workflowAPI, documentsAPI } from '../api'
 
 const C = {
   blue:      '#0C447C',
@@ -29,6 +29,14 @@ const DEFAULT_LEVELS = [
   { step:2, name:'Check',   stage:'Check',   checklist_required:false, assignees:[], templateFile:null },
   { step:3, name:'Review',  stage:'Review',  checklist_required:false, assignees:[], templateFile:null },
   { step:4, name:'Approve', stage:'Approve', checklist_required:false, assignees:[], templateFile:null },
+]
+
+const USER_DEFINED_DEFAULTS = [
+  { step:1, name:'Level 1', stage:'Prepare', checklist_required:false, assignees:[], templateFile:null },
+  { step:2, name:'Level 2', stage:'Check',   checklist_required:false, assignees:[], templateFile:null },
+  { step:3, name:'Level 3', stage:'Review',  checklist_required:false, assignees:[], templateFile:null },
+  { step:4, name:'Level 4', stage:'Approve', checklist_required:false, assignees:[], templateFile:null },
+  { step:5, name:'Level 5', stage:'Approve', checklist_required:false, assignees:[], templateFile:null },
 ]
 
 // ─── User search dropdown ─────────────────────────────────────────────────────
@@ -56,9 +64,9 @@ function UserSearch({ onSelect, excluded = [], placeholder = 'Search user by nam
     if (!q.trim()) { setResults([]); setOpen(false); return }
     const t = setTimeout(() => {
       setLoading(true)
-      adminAPI.listUsers({ q })
+      documentsAPI.searchUsers(q)
         .then(r => {
-          const filtered = (r.data || []).filter(u => u.is_active && !excluded.includes(u.id))
+          const filtered = (r.data || []).filter(u => !excluded.includes(u.id))
           setResults(filtered)
           setOpen(filtered.length > 0)
         })
@@ -160,7 +168,7 @@ function UserChip({ user, role, onRemove }) {
 
 // ─── Level card ───────────────────────────────────────────────────────────────
 function LevelCard({ level, index, total, onUpdate, onRemove, onMoveUp, onMoveDown,
-                     currentUserId, isUserDefined }) {
+                     currentUserId, isUserDefined, currentUser, editors = [] }) {
   const excluded = [currentUserId, ...level.assignees.map(u => u.id)]
   const sc = STAGE_COLORS[level.stage] || STAGE_COLORS.Approve
 
@@ -188,30 +196,30 @@ function LevelCard({ level, index, total, onUpdate, onRemove, onMoveUp, onMoveDo
         {/* Name + stage */}
         <div style={{ flex:1, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
           {isUserDefined && level.step > 1 ? (
-            <input
-              value={level.name}
-              onChange={e => onUpdate({ name: e.target.value })}
-              style={{
-                fontSize:13, fontWeight:700, color: sc.text,
-                border:'none', background:'transparent',
-                borderBottom:`1px dashed ${sc.border}`,
-                padding:'1px 2px', width:130,
-              }}
-            />
+            <div style={{ display:'flex', flexDirection:'column' }}>
+              <input
+                value={level.name}
+                onChange={e => onUpdate({ name: e.target.value })}
+                title="Click to rename this level"
+                placeholder="Level name *"
+                style={{
+                  fontSize:13, fontWeight:700,
+                  color: !level.name.trim() ? '#A32D2D' : sc.text,
+                  border:'none', background:'transparent',
+                  borderBottom: !level.name.trim()
+                    ? '1px solid #A32D2D'
+                    : `1px dashed ${sc.border}`,
+                  padding:'1px 2px', width:140, fontFamily:'inherit',
+                }}
+              />
+              {!level.name.trim() && (
+                <span style={{ fontSize:10, color:'#A32D2D', marginTop:2 }}>Required</span>
+              )}
+            </div>
           ) : (
             <span style={{ fontSize:13, fontWeight:700, color: sc.text }}>{level.name}</span>
           )}
-
-          {isUserDefined && level.step > 1 ? (
-            <select
-              value={level.stage}
-              onChange={e => onUpdate({ stage: e.target.value })}
-              style={{ fontSize:11, padding:'2px 6px', borderRadius:5,
-                border:`1px solid ${sc.border}`, background:'#fff', color: sc.text }}
-            >
-              {['Check','Review','Approve'].map(s => <option key={s}>{s}</option>)}
-            </select>
-          ) : (
+          {!isUserDefined && (
             <span style={{
               fontSize:11, padding:'2px 8px', borderRadius:99,
               background:`${sc.dot}22`, color: sc.text, fontWeight:500,
@@ -263,13 +271,41 @@ function LevelCard({ level, index, total, onUpdate, onRemove, onMoveUp, onMoveDo
       {/* Level body */}
       <div style={{ padding:'12px 16px' }}>
         {level.step === 1 ? (
-          <div style={{ fontSize:12, color:'#6b7280', fontStyle:'italic',
-            display:'flex', alignItems:'center', gap:8 }}>
-            <div style={{ width:28, height:28, borderRadius:'50%', background:'#f3f4f6',
-              display:'flex', alignItems:'center', justifyContent:'center', fontSize:11 }}>
-              You
+          <div>
+            <div style={{ fontSize:12, color:'#6b7280', fontStyle:'italic',
+              display:'flex', alignItems:'center', gap:8 }}>
+              <div style={{ width:28, height:28, borderRadius:'50%', background:'#f3f4f6',
+                display:'flex', alignItems:'center', justifyContent:'center', fontSize:11 }}>
+                You
+              </div>
+              <span>
+                <strong style={{ color:'#111', fontStyle:'normal' }}>{currentUser?.name || 'You'}</strong>
+                {' '}— Initiator (automatically assigned)
+              </span>
             </div>
-            <span>Initiator — automatically assigned to you</span>
+            {editors.length > 0 && (
+              <div style={{ marginTop:10, paddingTop:10, borderTop:'1px dashed #e5e7eb' }}>
+                <div style={{ fontSize:11, color:'#6b7280', marginBottom:6, fontWeight:500 }}>
+                  Designated editors ({editors.length}) — can also edit the document at this stage
+                </div>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                  {editors.map(u => (
+                    <span key={u.id} style={{
+                      display:'inline-flex', alignItems:'center', gap:6,
+                      background:'#f8fafc', border:`1px solid ${C.border}`,
+                      borderRadius:99, padding:'4px 10px', fontSize:12,
+                    }}>
+                      <span style={{
+                        width:18, height:18, borderRadius:'50%', background:C.accent,
+                        color:'#fff', display:'inline-flex', alignItems:'center',
+                        justifyContent:'center', fontSize:9, fontWeight:700,
+                      }}>{(u.name || '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2)}</span>
+                      {u.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <>
@@ -360,16 +396,31 @@ function LevelCard({ level, index, total, onUpdate, onRemove, onMoveUp, onMoveDo
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 export default function WorkflowInitModal({
-  docId, docTitle, docTypeId, currentUser, onClose, onSuccess
+  docId, docTitle, docTypeId, currentUser, editors = [],
+  onClose, onSuccess,
+  purpose = 'release',  // 'release' | 'archive'
 }) {
+  const isArchive = purpose === 'archive'
   const [mode, setMode]     = useState('Auto Populate')
   const [levels, setLevels] = useState(DEFAULT_LEVELS.map(l => ({ ...l, assignees:[] })))
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState('')
+  const [obsoleteReason, setObsoleteReason] = useState('')
+  const [password, setPassword] = useState('')
+
+  function changeMode(nextMode) {
+    if (nextMode === mode) return
+    const presets = nextMode === 'User Defined' ? USER_DEFINED_DEFAULTS : DEFAULT_LEVELS
+    setMode(nextMode)
+    setLevels(presets.map(l => ({ ...l, assignees:[], templateFile:null })))
+    setError('')
+  }
 
   function updateLevel(idx, changes) {
     setLevels(ls => ls.map((l, i) => i === idx ? { ...l, ...changes } : l))
   }
+
+  const renumber = (l, i) => ({ ...l, step: i + 1 })
 
   function addLevel() {
     if (levels.length >= 7) return
@@ -384,27 +435,45 @@ export default function WorkflowInitModal({
   }
 
   function removeLevel(idx) {
-    setLevels(ls =>
-      ls.filter((_, i) => i !== idx)
-        .map((l, i) => ({ ...l, step: i + 1 }))
-    )
+    setLevels(ls => {
+      // Always keep at least Prepare + one approver level
+      if (ls.length <= 2) return ls
+      return ls.filter((_, i) => i !== idx).map(renumber)
+    })
   }
 
   function moveLevel(idx, dir) {
-    // don't move Prepare (step=1)
+    // don't move step 1 (initiator)
     const targetIdx = idx + dir
     if (targetIdx <= 0 || targetIdx >= levels.length) return
     setLevels(ls => {
       const next = [...ls]
       ;[next[idx], next[targetIdx]] = [next[targetIdx], next[idx]]
-      return next.map((l, i) => ({ ...l, step: i + 1 }))
+      return next.map(renumber)
     })
   }
 
   async function submit() {
     setError('')
+    if (isArchive && !obsoleteReason.trim()) {
+      setError('Obsolete reason is mandatory for an archive workflow.')
+      return
+    }
+    if (!password) {
+      setError('Enter your password to authenticate the workflow initiation.')
+      return
+    }
+    // Need at least one approver step beyond the initiator
+    if (levels.length < 2) {
+      setError('Add at least one approval level after Prepare.')
+      return
+    }
     // Validate all levels except Prepare have at least 1 assignee
     for (const lv of levels) {
+      if (lv.step > 1 && !lv.name.trim()) {
+        setError(`Level ${lv.step} needs a name.`)
+        return
+      }
       if (lv.step > 1 && lv.assignees.length === 0) {
         setError(`"${lv.name}" needs at least one user. Please add someone.`)
         return
@@ -414,6 +483,9 @@ export default function WorkflowInitModal({
     try {
       const payload = {
         mode,
+        purpose,
+        password,
+        obsolete_reason: isArchive ? obsoleteReason.trim() : undefined,
         levels: levels.map(lv => ({
           step: lv.step,
           name: lv.name,
@@ -454,14 +526,39 @@ export default function WorkflowInitModal({
       onSuccess()
       onClose()
     } catch (e) {
-      setError(e.response?.data?.detail || 'Failed to initiate workflow. Please try again.')
+      setError(e.response?.data?.error || e.response?.data?.detail || 'Failed to initiate workflow. Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
   const totalUsers = levels.slice(1).reduce((s, l) => s + l.assignees.length, 0)
-  const allFilled  = levels.slice(1).every(l => l.assignees.length > 0)
+  const allFilled  = levels.slice(1).every(l => l.assignees.length > 0 && !!l.name.trim())
+
+  // Generalised flow numbering — same formula in both modes:
+  //   Draft = 05
+  //   middle level i (1-indexed)  = (i + 2) * 5      → 15, 20, 25, 30, …
+  //   Released                    = (totalLevels + 2) * 5
+  // For Auto Populate (3 middle levels) → 05, 15, 20, 25, 30
+  // For User Defined  (N middle levels) → 05, 15, 20, … , (N+2)*5
+  // For Auto Populate we keep the canonical labels (In Check / In Review / In Approval).
+  const AUTO_LABELS = ['In Check', 'In Review', 'In Approval']
+  const flowSteps = (() => {
+    const middle = levels.slice(1).map((lv, i) => {
+      const code = String((i + 3) * 5).padStart(2, '0')
+      const label = mode === 'Auto Populate'
+        ? (AUTO_LABELS[i] || `In ${lv.name}`)
+        : `In ${lv.name}`
+      const sc = STAGE_COLORS[lv.stage] || STAGE_COLORS.Approve
+      return [code, label, sc.dot]
+    })
+    const releasedCode = String((levels.length + 2) * 5).padStart(2, '0')
+    return [
+      ['05','Draft','#9ca3af'],
+      ...middle,
+      [releasedCode, 'Released', '#0F6E56'],
+    ]
+  })()
 
   return (
     <div style={{
@@ -482,7 +579,7 @@ export default function WorkflowInitModal({
         }}>
           <div>
             <div style={{ color:'#fff', fontWeight:700, fontSize:16 }}>
-              Initiate Approval Workflow
+              {isArchive ? 'Initiate Archive Workflow' : 'Initiate Approval Workflow'}
             </div>
             <div style={{ color:'rgba(255,255,255,0.7)', fontSize:12, marginTop:3 }}>
               {docTitle}
@@ -498,6 +595,31 @@ export default function WorkflowInitModal({
         {/* ── Scrollable body ── */}
         <div style={{ overflowY:'auto', flex:1, padding:'20px 24px' }}>
 
+          {isArchive && (
+            <div style={{ marginBottom:18 }}>
+              <div style={{
+                background:'#FEF3C7', border:'1px solid #F59E0B', borderRadius:8,
+                padding:'10px 14px', fontSize:12, color:'#854F0B', marginBottom:14,
+              }}>
+                <strong>Archive workflow.</strong> Once approved, the document moves to <strong>Archived</strong> status and is marked obsolete. This is logged in the audit trail.
+              </div>
+              <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:4 }}>
+                Obsolete Reason <span style={{ color:'#A32D2D' }}>*</span>
+              </label>
+              <textarea
+                value={obsoleteReason}
+                onChange={e => setObsoleteReason(e.target.value)}
+                placeholder="Why is this document being archived? (kept in the audit log and visible to all approvers)"
+                rows={3}
+                style={{
+                  width:'100%', boxSizing:'border-box', padding:'8px 10px',
+                  fontSize:13, border:`1px solid ${obsoleteReason.trim() ? C.border : '#fca5a5'}`,
+                  borderRadius:8, fontFamily:'inherit', resize:'vertical',
+                }}
+              />
+            </div>
+          )}
+
           {/* Mode toggle */}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20 }}>
             {[
@@ -511,12 +633,12 @@ export default function WorkflowInitModal({
                 id:'User Defined',
                 icon:'✏',
                 title:'User Defined',
-                sub:'You define up to 7 custom levels with any names.',
+                sub:'Prepare + 3 custom levels + Approve. Editable, up to 7.',
               },
             ].map(m => (
               <button
                 key={m.id}
-                onClick={() => setMode(m.id)}
+                onClick={() => changeMode(m.id)}
                 style={{
                   padding:'12px 14px', borderRadius:10, textAlign:'left',
                   border:`2px solid ${mode===m.id ? C.accent : C.border}`,
@@ -539,14 +661,7 @@ export default function WorkflowInitModal({
           {/* Status flow */}
           <div style={{ background:'#f8fafc', borderRadius:8, padding:'10px 14px',
             marginBottom:20, display:'flex', alignItems:'center', gap:0 }}>
-            {[
-              ['05','Draft','#9ca3af'],
-              ['10','Created','#185FA5'],
-              ['15','In Check','#BA7517'],
-              ['20','In Review','#7F77DD'],
-              ['25','In Approval','#1D9E75'],
-              ['30','Released','#0F6E56'],
-            ].map(([code, label, color], i, arr) => (
+            {flowSteps.map(([code, label, color], i, arr) => (
               <div key={code} style={{ display:'flex', alignItems:'center', flex:1 }}>
                 <div style={{ flex:1, textAlign:'center' }}>
                   <div style={{ fontSize:10, fontWeight:700, color }}>{code}</div>
@@ -595,6 +710,8 @@ export default function WorkflowInitModal({
               onMoveUp={() => moveLevel(idx, -1)}
               onMoveDown={() => moveLevel(idx, 1)}
               currentUserId={currentUser?.id}
+              currentUser={currentUser}
+              editors={editors}
               isUserDefined={mode === 'User Defined'}
             />
           ))}
@@ -616,6 +733,33 @@ export default function WorkflowInitModal({
               <span style={{ fontSize:11, color:'#9ca3af' }}>({7 - levels.length} remaining)</span>
             </button>
           )}
+
+          {/* Password authentication — required to initiate */}
+          <div style={{
+            marginTop:18, padding:'12px 14px', borderRadius:10,
+            background:'#f8fafc', border:`1px solid ${C.border}`,
+          }}>
+            <div style={{ fontSize:12, fontWeight:600, color:'#374151', marginBottom:6,
+              display:'flex', alignItems:'center', gap:6 }}>
+              <span>🔐</span>
+              Authenticate to {isArchive ? 'request archive' : 'initiate workflow'} <span style={{ color:'#A32D2D' }}>*</span>
+            </div>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:8 }}>
+              Enter your login password as a digital signature. This is logged in the audit trail.
+            </div>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              autoComplete="current-password"
+              placeholder="Your password"
+              style={{
+                width:'100%', boxSizing:'border-box', padding:'8px 10px',
+                fontSize:13, border:`1px solid ${password ? C.border : '#fca5a5'}`,
+                borderRadius:8, fontFamily:'inherit',
+              }}
+            />
+          </div>
 
           {error && (
             <div style={{
@@ -650,15 +794,15 @@ export default function WorkflowInitModal({
             </button>
             <button
               onClick={submit}
-              disabled={loading || !allFilled}
+              disabled={loading || !allFilled || !password}
               style={{
                 padding:'8px 24px', borderRadius:8, border:'none',
-                background: loading || !allFilled ? '#9ca3af' : C.blue,
-                color:'#fff', cursor: loading || !allFilled ? 'not-allowed':'pointer',
+                background: (loading || !allFilled || !password) ? '#9ca3af' : C.blue,
+                color:'#fff', cursor: (loading || !allFilled || !password) ? 'not-allowed':'pointer',
                 fontSize:13, fontWeight:600, fontFamily:'inherit',
               }}
             >
-              {loading ? 'Initiating…' : 'Initiate Workflow'}
+              {loading ? 'Initiating…' : (isArchive ? 'Initiate Archive' : 'Initiate Workflow')}
             </button>
           </div>
         </div>

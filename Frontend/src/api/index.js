@@ -21,10 +21,13 @@ api.interceptors.response.use(
                              error.config?.url?.includes('/auth/verify')
       const hasToken = !!localStorage.getItem('dms_token')
 
-      // Workflow action 401 = wrong password (not session expiry) — do NOT logout
+      // Workflow action / initiate 401 = wrong password digital-signature
+      // failure (not session expiry) — do NOT logout, let the modal show the
+      // error inline.
       const isWorkflowAction = error.config?.url?.includes('/workflow/') &&
                                (error.config?.url?.includes('/action') ||
-                                error.config?.url?.includes('/return'))
+                                error.config?.url?.includes('/return') ||
+                                error.config?.url?.includes('/initiate'))
 
       // Only clear and redirect if this wasn't an auth endpoint or workflow action
       // AND we actually had a token (meaning it expired/was rejected)
@@ -81,14 +84,16 @@ export const documentsAPI = {
   }),
   addFile:       (docId, formData)      => api.post(`/documents/${docId}/files`, formData),
   deleteFile:    (docId, fileId)       => api.delete(`/documents/${docId}/files/${fileId}`),
+  reassignDocNumber:(id, project, usi)    => api.post(`/documents/${id}/reassign`, { project, usi_kks_code: usi }),
   flagDeletion:     (id)                  => api.post(`/documents/${id}/flag-deletion`),
   unflagDeletion:   (id)                  => api.delete(`/documents/${id}/flag-deletion`),
   fileAccessStats:  (id)                  => api.get(`/documents/${id}/file-access-stats`),
-}
-
-// ─── Converter ───────────────────────────────────────────────────────────────
-export const converterAPI = {
-  pdfUrl: (fileId, token) => `/api/convert/files/${fileId}/pdf?token=${encodeURIComponent(token)}`,
+  searchUsers:      (q)                   => api.get('/users/search', { params: { q } }),
+  getEditors:       (id)                  => api.get(`/documents/${id}/editors`),
+  setEditors:       (id, editorIds)       => api.put(`/documents/${id}/editors`, { editor_ids: editorIds }),
+  requestEditAccess:(id, message)         => api.post(`/documents/${id}/request-edit-access`, { message }),
+  incomingAccessRequests: ()              => api.get('/access-requests/incoming'),
+  decideAccessRequest:    (id, action)    => api.post(`/access-requests/${id}/decide`, { action }),
 }
 
 // ─── Workflow ─────────────────────────────────────────────────────────────────
@@ -108,6 +113,9 @@ export const workflowAPI = {
   downloadTemplate: (docId, levelId)      => api.get(`/workflow/${docId}/checklist-template/${levelId}/download`, { responseType: 'blob' }),
   submitChecklist:  (docId, taskId, fd)   => api.post(`/workflow/${docId}/checklist-submit/${taskId}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }),
   downloadChecklist:(docId, taskId)       => api.get(`/workflow/${docId}/checklist-submit/${taskId}/download`, { responseType: 'blob' }),
+  adminForceReset:  (docId, note)         => api.post(`/workflow/${docId}/admin-force-reset`, { note }),
+  adminReassign:    (docId, assigneeId)   => api.post(`/workflow/${docId}/admin-reassign`, { assignee_id: assigneeId }),
+  adminFixStatus:   (docId)              => api.post(`/workflow/${docId}/admin-fix-status`),
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
@@ -166,6 +174,7 @@ export const libraryAPI = {
   updateFolder:      (id, data)   => api.put(`/library/folders/${id}`, data),
   deleteFolder:      (id)         => api.delete(`/library/folders/${id}`),
   folderDocuments:   (id)         => api.get(`/library/folders/${id}/documents`),
+  docTypeDocuments:  (id)         => api.get(`/library/doc-types/${id}/documents`),
 }
 
 export default api

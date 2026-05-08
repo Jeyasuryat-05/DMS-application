@@ -108,6 +108,29 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
         setError(`"${f.label}" is required for this document type.`)
         return
       }
+      const v = customMeta[f.key]
+      if (!v) continue
+      const sval = String(v)
+      const k = (f.key || '').toLowerCase()
+      if (f.type === 'numeric' && !/^\d+$/.test(sval)) {
+        setError(`"${f.label}" must contain digits only.`); return
+      }
+      if (f.type === 'numeric' || f.type === 'char') {
+        if (f.length && sval.length !== f.length) {
+          setError(`"${f.label}" must be exactly ${f.length} ${f.type === 'numeric' ? 'digits' : 'characters'}.`); return
+        }
+        if (!f.length && f.min_length && sval.length < f.min_length) {
+          setError(`"${f.label}" must be at least ${f.min_length} characters.`); return
+        }
+        if (!f.length && f.max_length && sval.length > f.max_length) {
+          setError(`"${f.label}" must be at most ${f.max_length} characters.`); return
+        }
+      }
+      if ((k === 'usi' || k === 'usi_kks_code')) {
+        if (!/^\d{5}$/.test(sval)) {
+          setError(`"${f.label}" must be exactly 5 numeric digits.`); return
+        }
+      }
     }
 
     setLoading(true); setError('')
@@ -137,11 +160,74 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
                    borderRadius:7, border:'1px solid #d1d5db' }
 
     switch (field.type) {
+      case 'numeric':
+      case 'char': {
+        const isNumeric = field.type === 'numeric'
+        const fixed = field.length || null
+        const minL  = !fixed ? (field.min_length || null) : null
+        const maxL  = fixed || field.max_length || null
+        const handleChange = (raw) => {
+          let v = String(raw)
+          if (isNumeric) v = v.replace(/\D/g, '')
+          if (maxL) v = v.slice(0, maxL)
+          setMeta(field.key, v)
+        }
+        let invalid = false
+        let hint = isNumeric ? 'Digits only' : 'Letters / digits'
+        if (val) {
+          if (fixed) {
+            if (val.length !== fixed) invalid = true
+            hint = `Exactly ${fixed} ${isNumeric ? 'digit' : 'char'}${fixed === 1 ? '' : 's'}`
+          } else if (minL && val.length < minL) {
+            invalid = true; hint = `Min ${minL}`
+          }
+        } else if (fixed) {
+          hint = `Exactly ${fixed} ${isNumeric ? 'digit' : 'char'}${fixed === 1 ? '' : 's'}`
+        } else if (minL || maxL) {
+          hint = `Length ${minL || 0}–${maxL || '∞'}`
+        }
+        return (
+          <div key={field.key}>
+            <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>
+              {lbl}
+              <span style={{ marginLeft:8, fontSize:10, color:'#9ca3af' }}>{hint}</span>
+            </label>
+            <input
+              value={val}
+              onChange={e => handleChange(e.target.value)}
+              inputMode={isNumeric ? 'numeric' : undefined}
+              maxLength={maxL || undefined}
+              placeholder={fixed ? (isNumeric ? '1'.repeat(fixed) : 'X'.repeat(fixed)) : ''}
+              style={{ ...iS, borderColor: invalid ? '#A32D2D' : undefined }}
+            />
+            {invalid && (
+              <div style={{ fontSize:10, color:'#A32D2D', marginTop:2 }}>
+                {fixed ? `Must be exactly ${fixed} ${isNumeric ? 'digits' : 'characters'}.` :
+                  `Must be at least ${minL} characters.`}
+              </div>
+            )}
+          </div>
+        )
+      }
       case 'text': {
         const isAutoSheets = (
           field.label?.toLowerCase().includes('number of sheet') ||
           field.key?.toLowerCase().includes('number_of_sheet')
         ) && pdfPageCount !== null
+        // Legacy USI key fallback: if a schema still has 'usi' as plain text
+        // (created before the dedicated numeric type), keep enforcing the
+        // 5-digit rule so existing doc types keep working.
+        const isUsi = (field.key || '').toLowerCase() === 'usi' ||
+                      (field.key || '').toLowerCase() === 'usi_kks_code'
+        const usiInvalid = isUsi && val && !/^\d{5}$/.test(val)
+        const handleChange = (raw) => {
+          if (isUsi) {
+            const cleaned = String(raw).replace(/\D/g, '').slice(0, 5)
+            setMeta(field.key, cleaned)
+          } else {
+            setMeta(field.key, raw)
+          }
+        }
         return (
           <div key={field.key}>
             <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>
@@ -152,10 +238,26 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
                   ✓ Auto-detected from PDF
                 </span>
               )}
+              {isUsi && (
+                <span style={{ marginLeft:8, fontSize:10, color:'#6b7280' }}>
+                  5 digits, numeric only
+                </span>
+              )}
             </label>
-            <input value={val} onChange={e => setMeta(field.key, e.target.value)}
-              style={{ ...iS, borderColor: isAutoSheets ? '#1D9E75' : undefined }}
-              placeholder={field.placeholder || ''} />
+            <input
+              value={val}
+              onChange={e => handleChange(e.target.value)}
+              inputMode={isUsi ? 'numeric' : undefined}
+              pattern={isUsi ? '\\d{5}' : undefined}
+              maxLength={isUsi ? 5 : undefined}
+              style={{ ...iS,
+                borderColor: usiInvalid ? '#A32D2D' : (isAutoSheets ? '#1D9E75' : undefined) }}
+              placeholder={isUsi ? '12345' : (field.placeholder || '')} />
+            {usiInvalid && (
+              <div style={{ fontSize:10, color:'#A32D2D', marginTop:2 }}>
+                USI must be exactly 5 digits.
+              </div>
+            )}
             {isAutoSheets && (
               <div style={{ fontSize:10, color:'#0F6E56', marginTop:2 }}>
                 {pdfPageCount} page{pdfPageCount !== 1 ? 's' : ''} detected in uploaded PDF

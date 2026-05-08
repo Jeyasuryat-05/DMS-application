@@ -9,7 +9,7 @@
  *  - CSV export
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { adminAPI, authAPI } from '../api'
+import { adminAPI, authAPI, libraryAPI } from '../api'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { fmtDate, fmtDateTime } from '../utils/dates'
 
@@ -221,32 +221,42 @@ function UsersGrid({ toast }) {
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
           <thead>
             <tr>
-              {['SAP Username','Name','Email','Department','Role','DMS','Create','Edit','Delete','Read','Auth Codes','Active','Actions'].map(h=>(
+              {['Employee ID','SAP Username','Name','Email','Department','Role','DMS','Create','Edit','Delete','Read','Active','Actions'].map(h=>(
                 <th key={h} style={thStyle}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={9} style={{padding:32,textAlign:'center',color:C.gray}}>Loading…</td></tr>}
-            {!loading && displayed.map(row => (
+            {loading && <tr><td colSpan={13} style={{padding:32,textAlign:'center',color:C.gray}}>Loading…</td></tr>}
+            {!loading && displayed.map(row => {
+              const flagCell = (field) => (
+                <td style={{padding:'6px 10px',borderRight:`1px solid ${C.border}`,textAlign:'center'}}>
+                  <input
+                    type="checkbox"
+                    checked={!!(dirty[row.id]?.[field] ?? row[field])}
+                    onChange={e => markDirty(row.id, field, e.target.checked)}
+                  />
+                </td>
+              )
+              return (
               <tr key={row.id}
                 style={{ borderBottom:`1px solid ${C.border}`, background: dirty[row.id] ? '#fffbeb' : 'white' }}
                 onMouseOver={e=>e.currentTarget.style.background=dirty[row.id]?'#fffbeb':C.rowHover}
                 onMouseOut={e=>e.currentTarget.style.background=dirty[row.id]?'#fffbeb':'white'}
               >
-                <Cell value={row.employee_id} onChange={v=>markDirty(row.id,'employee_id',v)} width={90} />
-                <Cell value={row.name}        onChange={v=>markDirty(row.id,'name',v)}        width={150} />
-                <Cell value={row.email}       onChange={v=>markDirty(row.id,'email',v)}       width={200} />
-                <Cell value={row.department}  onChange={v=>markDirty(row.id,'department',v)}  type="select" options={DEPTS} width={130} />
-                <Cell value={row.role}        onChange={v=>markDirty(row.id,'role',v)}        type="select" options={ROLES} width={150} />
+                <Cell value={row.employee_id}  onChange={v=>markDirty(row.id,'employee_id',v)}  width={90} />
+                <Cell value={row.sap_username} onChange={v=>markDirty(row.id,'sap_username',v)} width={110} />
+                <Cell value={row.name}         onChange={v=>markDirty(row.id,'name',v)}         width={150} />
+                <Cell value={row.email}        onChange={v=>markDirty(row.id,'email',v)}        width={200} />
+                <Cell value={row.department}   onChange={v=>markDirty(row.id,'department',v)}   type="select" options={DEPTS} width={130} />
+                <Cell value={row.role}         onChange={v=>markDirty(row.id,'role',v)}         type="select" options={ROLES} width={150} />
+                {flagCell('dms_enabled')}
+                {flagCell('can_create')}
+                {flagCell('can_edit')}
+                {flagCell('can_delete')}
+                {flagCell('can_read')}
                 <td style={{padding:'6px 10px',borderRight:`1px solid ${C.border}`}}>
                   <Chip label={row.is_active?'Active':'Inactive'} color={row.is_active?C.green:C.red} />
-                </td>
-                <td style={{padding:'6px 10px',borderRight:`1px solid ${C.border}`,textAlign:'center'}}>
-                  {row.is_sso_user ? <span title="SSO User">🔑</span> : '—'}
-                </td>
-                <td style={{padding:'6px 10px',borderRight:`1px solid ${C.border}`,fontSize:11,color:C.gray,whiteSpace:'nowrap'}}>
-                  {fmtDate(row.last_login)}
                 </td>
                 <td style={{padding:'6px 10px',whiteSpace:'nowrap'}}>
                   <div style={{display:'flex',gap:5}}>
@@ -257,9 +267,10 @@ function UsersGrid({ toast }) {
                   </div>
                 </td>
               </tr>
-            ))}
+              )
+            })}
             {!loading && displayed.length===0 && newRows.length===0 && (
-              <tr><td colSpan={9} style={{padding:32,textAlign:'center',color:C.gray}}>No users found</td></tr>
+              <tr><td colSpan={13} style={{padding:32,textAlign:'center',color:C.gray}}>No users found</td></tr>
             )}
             {/* New rows */}
             {newRows.map((nr, idx) => (
@@ -362,6 +373,8 @@ const FMT_BY_EXT = Object.fromEntries(ALL_FORMATS.map(f=>[f.extension, f]))
 const FIELD_TYPES = [
   { value:'text',        label:'Text (single line)' },
   { value:'textarea',    label:'Text (multi line)' },
+  { value:'char',        label:'Char (fixed-length text)' },
+  { value:'numeric',     label:'Numeric (digits only, fixed length)' },
   { value:'number',      label:'Number' },
   { value:'date',        label:'Date' },
   { value:'dropdown',    label:'Dropdown (select one)' },
@@ -548,6 +561,62 @@ function MetadataSchemaEditor({ schema = [], onChange, onSave }) {
             </div>
           </div>
 
+          {/* Char / Numeric length controls */}
+          {(editField.type === 'char' || editField.type === 'numeric') && (
+            <div style={{ marginTop:6, marginBottom:10, display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10 }}>
+              <div>
+                <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>
+                  Exact Length
+                </label>
+                <input
+                  type="number" min="1" max="200"
+                  value={editField.length || ''}
+                  onChange={e => setEditField(f => ({ ...f,
+                    length: e.target.value === '' ? null : Math.max(1, parseInt(e.target.value, 10) || 1),
+                    min_length: null, max_length: null,
+                  }))}
+                  placeholder="e.g. 5"
+                  style={iS} />
+                <div style={{ fontSize:10, color:'#9ca3af', marginTop:2 }}>
+                  Optional. Leave blank if you want a min/max range instead.
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>
+                  Min Length (optional)
+                </label>
+                <input
+                  type="number" min="0" max="200"
+                  disabled={!!editField.length}
+                  value={editField.min_length || ''}
+                  onChange={e => setEditField(f => ({ ...f,
+                    min_length: e.target.value === '' ? null : parseInt(e.target.value, 10),
+                  }))}
+                  style={{ ...iS, opacity: editField.length ? 0.5 : 1 }} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>
+                  Max Length (optional)
+                </label>
+                <input
+                  type="number" min="1" max="500"
+                  disabled={!!editField.length}
+                  value={editField.max_length || ''}
+                  onChange={e => setEditField(f => ({ ...f,
+                    max_length: e.target.value === '' ? null : parseInt(e.target.value, 10),
+                  }))}
+                  style={{ ...iS, opacity: editField.length ? 0.5 : 1 }} />
+              </div>
+              {editField.type === 'numeric' && (
+                <div style={{ gridColumn:'1/-1', fontSize:11, color:'#6b7280', background:'#fff',
+                  padding:'8px 10px', borderRadius:6, border:'1px dashed #c4b5fd' }}>
+                  <strong>Numeric:</strong> only digits 0–9 are accepted. The Save button will be disabled
+                  until the value matches the configured length.
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Dropdown / Multi options */}
           {(editField.type === 'dropdown' || editField.type === 'multi') && (
             <OptionsEditor
@@ -583,9 +652,13 @@ function MetadataSchemaEditor({ schema = [], onChange, onSave }) {
   )
 }
 
+function serializeOptions(opts) {
+  return (opts||[]).map(o => typeof o === 'object' && o !== null ? (o.label || o.value || JSON.stringify(o)) : String(o)).join('\n')
+}
+
 function OptionsEditor({ options, onChange, label }) {
-  const [raw, setRaw] = useState((options||[]).join('\n'))
-  useEffect(() => { setRaw((options||[]).join('\n')) }, [options.join(',')])
+  const [raw, setRaw] = useState(serializeOptions(options))
+  useEffect(() => { setRaw(serializeOptions(options)) }, [JSON.stringify(options)])
 
   function commit(val) {
     setRaw(val)
@@ -609,17 +682,17 @@ function OptionsEditor({ options, onChange, label }) {
 
 function HierarchicalEditor({ options, children_map, onChange }) {
   // options = parent list, children_map = { parent: [child, child...] }
-  const [parents, setParents] = useState((options||[]).join('\n'))
-  const [selected, setSelected] = useState(options?.[0] || '')
+  const [parents, setParents] = useState(serializeOptions(options))
+  const [selected, setSelected] = useState(options?.[0] ? (typeof options[0] === 'object' ? (options[0].label || options[0].value) : options[0]) : '')
   const [childRaw, setChildRaw] = useState('')
 
   useEffect(() => {
-    setParents((options||[]).join('\n'))
-    if (options?.length) setSelected(options[0])
-  }, [options.join(',')])
+    setParents(serializeOptions(options))
+    if (options?.length) setSelected(typeof options[0] === 'object' ? (options[0].label || options[0].value) : options[0])
+  }, [JSON.stringify(options)])
 
   useEffect(() => {
-    setChildRaw((children_map?.[selected]||[]).join('\n'))
+    setChildRaw(serializeOptions(children_map?.[selected]))
   }, [selected, JSON.stringify(children_map)])
 
   function commitParents(val) {
@@ -698,6 +771,7 @@ function HierarchicalEditor({ options, children_map, onChange }) {
 
 function DocTypesGrid({ toast }) {
   const [rows, setRows]         = useState([])
+  const [structureFolders, setStructureFolders] = useState([])
   const [dirty, setDirty]       = useState({})
   const [newRows, setNewRows]   = useState([])
   const [expanded, setExpanded] = useState(null)  // id of expanded row (formats panel)
@@ -706,6 +780,16 @@ function DocTypesGrid({ toast }) {
   const load = () => {
     setLoading(true)
     adminAPI.listDocTypes().then(r=>setRows(r.data)).finally(()=>setLoading(false))
+    libraryAPI.tree().then(r => {
+      // Flatten the tree and keep only structure folders
+      const out = []
+      const walk = (nodes) => nodes.forEach(n => {
+        if (n.is_structure_folder) out.push(n)
+        if (n.children?.length) walk(n.children)
+      })
+      walk(r.data || [])
+      setStructureFolders(out)
+    }).catch(() => setStructureFolders([]))
   }
   useEffect(load, [])
 
@@ -734,7 +818,7 @@ function DocTypesGrid({ toast }) {
   }
 
   function addNewRow() {
-    setNewRows(nr=>[...nr,{_id:Date.now(),code:'',name:'',description:'',number_pattern:'',allowed_formats:[]}])
+    setNewRows(nr=>[...nr,{_id:Date.now(),code:'',name:'',parent_id:null,description:'',number_pattern:'',allowed_formats:[]}])
   }
 
   async function saveNewRow(idx) {

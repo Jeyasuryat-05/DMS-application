@@ -29,7 +29,7 @@ const CHART_TYPES = [
 const STATUS_COLOR = {
   Draft: '#B4B2A9', 'Under Review': '#EF9F27',
   Approved: '#1D9E75', Rejected: '#E24B4A',
-  Archived: '#888780', Created: '#185FA5',
+  Archived: '#888780',
 }
 
 const PALETTE = [
@@ -54,10 +54,15 @@ export default function Dashboard() {
   const [byType,       setByType]       = useState([])
   const [byTypeStatus, setByTypeStatus] = useState({ data: [], statuses: [] })
   const [allDocTypes,  setAllDocTypes]  = useState([])
+  const [accessRequests, setAccessRequests] = useState([])
   const [loading,      setLoading]      = useState(true)
   const [activeTab,    setActiveTab]    = useState('overview')
   const [chartType,    setChartType]    = useState('bar')
   const [classify,     setClassify]     = useState('status')
+
+  function loadAccessRequests() {
+    documentsAPI.incomingAccessRequests().then(r => setAccessRequests(r.data || [])).catch(() => {})
+  }
 
   useEffect(() => {
     Promise.all([
@@ -77,7 +82,15 @@ export default function Dashboard() {
       setRecent(r.data)
       setAllDocTypes(dt.data || [])
     }).catch(() => {}).finally(() => setLoading(false))
+    loadAccessRequests()
   }, [])
+
+  async function decideAccess(reqId, action) {
+    try {
+      await documentsAPI.decideAccessRequest(reqId, action)
+      loadAccessRequests()
+    } catch (e) { alert(e.response?.data?.error || 'Could not save decision') }
+  }
 
   if (loading) return <div style={{ padding: 32 }}><Spinner /></div>
 
@@ -351,13 +364,19 @@ function StatusChart({ byStatus, byType, byTypeStatus, allDocTypes, chartType, s
   const isDrilling   = selectedType !== null
   const isTypeStatus = !isDrilling && classify === 'type_status'
 
+  const STATUS_CHARTS = CHART_TYPES.filter(c => ['bar', 'pie', 'donut'].includes(c.key))
+
   const availableCharts = isTypeStatus
     ? [{ key: 'stacked', label: 'Stacked' }, { key: 'grouped', label: 'Grouped' }]
-    : CHART_TYPES
+    : classify === 'status'
+      ? STATUS_CHARTS
+      : CHART_TYPES
 
   const effectiveChart = isTypeStatus
     ? (['stacked', 'grouped'].includes(chartType) ? chartType : 'stacked')
-    : chartType
+    : classify === 'status' && !['bar', 'pie', 'donut'].includes(chartType)
+      ? 'bar'
+      : chartType
 
   // Simple (non-drill) data
   const raw = classify === 'status' ? byStatus : byType
@@ -517,14 +536,16 @@ function TypeStatusChart({ data, statuses, mode, onTypeClick }) {
 }
 
 function BarChartView({ data }) {
+  const top = [...data].sort((a, b) => b.value - a.value).slice(0, 15)
   return (
-    <BarChart data={data} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+    <BarChart data={top} margin={{ top: 4, right: 8, left: -20, bottom: 60 }}>
       <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+      <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0}
+        tickFormatter={n => n.length > 14 ? n.slice(0, 12) + '…' : n} />
       <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
       <Tooltip />
       <Bar dataKey="value" name="Documents" radius={[4,4,0,0]}>
-        {data.map((d, i) => <Cell key={i} fill={d.fill} />)}
+        {top.map((d, i) => <Cell key={i} fill={d.fill} />)}
       </Bar>
     </BarChart>
   )
@@ -532,26 +553,33 @@ function BarChartView({ data }) {
 
 function PieChartView({ data, hole }) {
   const inner = hole ? '55%' : '0%'
+  const renderLabel = ({ name, percent }) => {
+    if (percent < 0.06) return null
+    return `${(percent * 100).toFixed(0)}%`
+  }
   return (
     <PieChart>
       <Pie data={data} dataKey="value" nameKey="name"
-        cx="50%" cy="50%" innerRadius={inner} outerRadius="75%"
-        paddingAngle={2} label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`}
+        cx="50%" cy="50%" innerRadius={inner} outerRadius="70%"
+        paddingAngle={2}
+        label={renderLabel}
         labelLine={false}
       >
         {data.map((d, i) => <Cell key={i} fill={d.fill} />)}
       </Pie>
-      <Tooltip formatter={(v) => [v, 'Documents']} />
+      <Tooltip formatter={(v, name) => [v, name]} />
       <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
     </PieChart>
   )
 }
 
 function LineChartView({ data }) {
+  const top = [...data].sort((a, b) => b.value - a.value).slice(0, 15)
   return (
-    <LineChart data={data} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+    <LineChart data={top} margin={{ top: 4, right: 8, left: -20, bottom: 60 }}>
       <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+      <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0}
+        tickFormatter={n => n.length > 14 ? n.slice(0, 12) + '…' : n} />
       <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
       <Tooltip />
       <Line type="monotone" dataKey="value" name="Documents"
@@ -561,8 +589,9 @@ function LineChartView({ data }) {
 }
 
 function AreaChartView({ data }) {
+  const top = [...data].sort((a, b) => b.value - a.value).slice(0, 15)
   return (
-    <AreaChart data={data} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+    <AreaChart data={top} margin={{ top: 4, right: 8, left: -20, bottom: 60 }}>
       <defs>
         <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="5%"  stopColor="#185FA5" stopOpacity={0.25} />
@@ -570,7 +599,8 @@ function AreaChartView({ data }) {
         </linearGradient>
       </defs>
       <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+      <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0}
+        tickFormatter={n => n.length > 14 ? n.slice(0, 12) + '…' : n} />
       <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
       <Tooltip />
       <Area type="monotone" dataKey="value" name="Documents"
@@ -580,13 +610,16 @@ function AreaChartView({ data }) {
 }
 
 function RadarChartView({ data }) {
+  const top = [...data].sort((a, b) => b.value - a.value).slice(0, 10)
+  const truncate = (name) => name.length > 18 ? name.slice(0, 16) + '…' : name
   return (
-    <RadarChart data={data} cx="50%" cy="50%" outerRadius="70%">
+    <RadarChart data={top} cx="50%" cy="50%" outerRadius="60%">
       <PolarGrid stroke="#e5e7eb" />
-      <PolarAngleAxis dataKey="name" tick={{ fontSize: 11 }} />
+      <PolarAngleAxis dataKey="name" tick={{ fontSize: 10 }}
+        tickFormatter={truncate} />
       <Radar name="Documents" dataKey="value"
         stroke="#185FA5" fill="#185FA5" fillOpacity={0.25} />
-      <Tooltip />
+      <Tooltip formatter={(v, name) => [v, name]} />
     </RadarChart>
   )
 }
