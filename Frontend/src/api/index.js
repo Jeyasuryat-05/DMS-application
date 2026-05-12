@@ -46,11 +46,9 @@ export const authAPI = {
   config:      ()                      => api.get('/auth/config'),
   verifyCode:  (code)                  => api.post('/auth/verify-code', { code }),
   login:       (email, password, gate) => {
-    const form = new FormData()
-    form.append('username', email)
-    form.append('password', password)
+    const data = { username: email, password }
     const headers = gate ? { 'X-Gate-Token': gate } : {}
-    return api.post('/auth/login', form, { headers })
+    return api.post('/auth/login', data, { headers })
   },
   me:                   ()       => api.get('/auth/me'),
   register:             (data)   => api.post('/auth/register', data),

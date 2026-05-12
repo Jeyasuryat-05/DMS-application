@@ -26,6 +26,30 @@ export function AuthProvider({ children }) {
     setLoading(false)
   }, [])
 
+  // Periodic sync with backend every 60 seconds
+  useEffect(() => {
+    if (!user) return
+
+    const syncUser = async () => {
+      try {
+        const res = await authAPI.me()
+        const updatedUser = res.data
+        setUser(updatedUser)
+        localStorage.setItem('dms_user', JSON.stringify(updatedUser))
+      } catch (err) {
+        // Silently fail if sync fails (network issue, token expired, etc)
+        console.debug('User sync failed:', err)
+      }
+    }
+
+    // Sync immediately on mount
+    syncUser()
+
+    // Then sync every 60 seconds
+    const interval = setInterval(syncUser, 60000)
+    return () => clearInterval(interval)
+  }, [user])
+
   async function login(email, password, gateToken) {
     try {
       const res      = await authAPI.login(email, password, gateToken)

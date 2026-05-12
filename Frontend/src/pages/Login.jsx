@@ -167,12 +167,12 @@ export default function Login() {
             <form onSubmit={handleLogin} autoComplete="off">
               <div style={{ marginBottom: 14 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
-                  Employee ID
+                  Employee ID / Email
                 </label>
                 <input
                   type="text" value={empId}
-                  onChange={e => setEmpId(e.target.value.toUpperCase())}
-                  placeholder="Enter your employee ID"
+                  onChange={e => setEmpId(e.target.value.includes('@') ? e.target.value : e.target.value.toUpperCase())}
+                  placeholder="Enter your employee ID or email"
                   style={{ width: '100%', boxSizing: 'border-box' }}
                   autoComplete="off"
                   readOnly

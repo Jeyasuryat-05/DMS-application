@@ -147,9 +147,14 @@ def list_create_documents(request):
 def _list_documents(request):
     try:
         q = request.query_params.get('q')
+        doc_number = request.query_params.get('doc_number')
+        serial_no = request.query_params.get('serial_no')
+        version = request.query_params.get('version')
+        version_mode = request.query_params.get('version_mode', 'all')
         doc_type_id = request.query_params.get('doc_type_id')
         status_filter = request.query_params.get('status')
         confidential = request.query_params.get('confidential')
+        flagged_for_deletion = request.query_params.get('flagged_for_deletion')
         expiring_days = request.query_params.get('expiring_days')
         skip = int(request.query_params.get('skip', 0))
         limit = int(request.query_params.get('limit', 100))
@@ -160,12 +165,18 @@ def _list_documents(request):
                 Q(title__icontains=q) | Q(doc_number__icontains=q) |
                 Q(project__icontains=q) | Q(usi_kks_code__icontains=q)
             )
+        if doc_number:
+            qs = qs.filter(doc_number__icontains=doc_number)
+        if serial_no:
+            qs = qs.filter(serial_no__icontains=serial_no)
         if doc_type_id:
             qs = qs.filter(doc_type_id=int(doc_type_id))
         if status_filter:
             qs = qs.filter(status=status_filter)
         if confidential is not None:
             qs = qs.filter(confidential=(confidential.lower() == 'true'))
+        if flagged_for_deletion is not None:
+            qs = qs.filter(flagged_for_deletion=(flagged_for_deletion.lower() == 'true'))
         if expiring_days:
             cutoff = datetime.utcnow() + timedelta(days=int(expiring_days))
             qs = qs.filter(
@@ -203,6 +214,7 @@ def _list_documents(request):
                 row['current_version'] = v.version_number
                 row['version_change_reason'] = v.change_reason or ''
                 row['version_change_label']  = v.change_label or ''
+                row['is_current_version'] = v.version_number == d.current_version
                 if v.version_number == d.current_version:
                     # Current version row keeps the document's live status / workflow.
                     pass
@@ -222,6 +234,12 @@ def _list_documents(request):
         # versions were marked Released).
         if status_filter:
             out = [r for r in out if r.get('status') == status_filter]
+        if version:
+            out = [r for r in out if r.get('current_version') == version]
+        if version_mode == 'latest':
+            out = [r for r in out if r.get('is_current_version')]
+        elif version_mode == 'released':
+            out = [r for r in out if r.get('status') == 'Released']
         return Response(out)
     except Exception:
         print('list_documents error:', traceback.format_exc())
@@ -1398,7 +1416,7 @@ def flag_deletion(request, doc_id):
             pass
 
         doc.flagged_for_deletion = True
-        doc.flagged_at = datetime.utcnow()
+        doc.flagged_at = timezone.now()
         doc.flagged_by_id = request.user.id
         doc.save(update_fields=['flagged_for_deletion', 'flagged_at', 'flagged_by_id'])
         AuditLog.objects.create(document_id=doc.id, user_id=request.user.id, action='Flagged for Deletion')

@@ -1285,7 +1285,7 @@ function FlaggedDocumentsPanel({ toast }) {
         <div>
           <span style={{ fontWeight:700, fontSize:15 }}>🚩 Documents Flagged for Deletion</span>
           <span style={{ marginLeft:10, fontSize:12, color:C.gray }}>
-            Scheduled automatic cleanup runs daily at 12:00 AM IST
+            Scheduled automatic cleanup runs at 00:00, 06:00, 12:00, and 18:00 IST
           </span>
         </div>
         <div style={{ display:'flex', gap:8 }}>

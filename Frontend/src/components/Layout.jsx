@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useState, useEffect, useRef } from 'react'
 import { workflowAPI, authAPI } from '../api'
+import NotificationBell from './NotificationBell'
 
 const ADMIN_ROLES = ['System Admin', 'Sub Admin']
 
@@ -305,6 +306,7 @@ export default function Layout() {
           <div style={{ fontSize: 13, color: '#6b7280' }}>
             Welcome, <strong style={{ color: '#111827' }}>{user?.name?.split(' ')[0]}</strong>
           </div>
+          <NotificationBell />
           <button
             onClick={() => setProfileOpen(true)}
             title="My Profile"

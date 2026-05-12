@@ -5,6 +5,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
+from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect
 
 
@@ -107,10 +108,14 @@ def login(request):
     )
     if not _verify_gate_token(gate_token):
         return Response({'error': 'Access code required'}, status=403)
-    username = request.data.get('username', '')
-    password = request.data.get('password', '')
+    username = (request.data.get('username') or '').strip()
+    password = (request.data.get('password') or '').strip()
+    if not username or not password:
+        return Response({'error': 'Incorrect employee ID or password'}, status=400)
     try:
-        user = User.objects.get(employee_id=username)
+        user = User.objects.get(
+            Q(employee_id__iexact=username) | Q(email__iexact=username)
+        )
     except User.DoesNotExist:
         return Response({'error': 'Incorrect employee ID or password'}, status=400)
     if not user.hashed_password or not verify_password(password, user.hashed_password):

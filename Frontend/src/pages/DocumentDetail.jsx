@@ -347,6 +347,7 @@ export default function DocumentDetail() {
   const [showArchiveModal, setShowArchiveModal] = useState(false)
   const [archiveReason, setArchiveReason]       = useState('')
   const [showEditorsModal, setShowEditorsModal] = useState(false)
+  const [pendingAccessRequests, setPendingAccessRequests] = useState([])
   const [showAccessRequestModal, setShowAccessRequestModal] = useState(false)
   const [accessRequestMsg, setAccessRequestMsg] = useState('')
   const [accessRequestBusy, setAccessRequestBusy] = useState(false)
@@ -540,6 +541,14 @@ export default function DocumentDetail() {
     } catch {
       setEditorsList(doc?.editors || [])
     }
+    // Load pending access requests for this document
+    try {
+      const reqRes = await documentsAPI.incomingAccessRequests()
+      const docRequests = (reqRes.data || []).filter(r => r.document?.id === parseInt(id))
+      setPendingAccessRequests(docRequests)
+    } catch {
+      setPendingAccessRequests([])
+    }
     setEditorSearch('')
     setEditorResults([])
     setShowEditorsModal(true)
@@ -567,6 +576,20 @@ export default function DocumentDetail() {
     } catch (e) {
       alert(e.response?.data?.error || 'Could not save editors')
     } finally { setSavingEditors(false) }
+  }
+
+  async function handleDecideAccessRequest(requestId, action) {
+    try {
+      await documentsAPI.decideAccessRequest(requestId, action)
+      // Remove from pending list
+      setPendingAccessRequests(r => r.filter(req => req.id !== requestId))
+      // If approved, also add to editors and refresh
+      if (action === 'approve') {
+        refresh()
+      }
+    } catch (e) {
+      alert(e.response?.data?.error || `Could not ${action} request`)
+    }
   }
 
   async function handleUploadVersion() {
@@ -828,6 +851,45 @@ export default function DocumentDetail() {
           {doc.confidential && <Badge label="Confidential" />}
           {doc.checked_out && <Badge label="Checked Out" />}
           <Badge label={viewingHistorical ? (viewingVersionStatus || 'Superseded') : doc.status} />
+          {canWfAction && myPendingTask && (
+            <>
+              <button
+                onClick={() => setWfAction('advance')}
+                disabled={myPendingTask.level?.checklist_required === true && !!myPendingTask.level?.checklist_template_name && !myPendingTask.checklist_done}
+                title="Approve this document at your assigned level"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                  border: 'none', background: '#0F6E56', color: '#fff',
+                  fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+                  opacity: (myPendingTask.level?.checklist_required === true && !!myPendingTask.level?.checklist_template_name && !myPendingTask.checklist_done) ? 0.6 : 1,
+                }}>
+                ✅ Approve
+              </button>
+              <button
+                onClick={() => setWfAction('reject')}
+                title="Reject this document"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                  border: 'none', background: '#A32D2D', color: '#fff',
+                  fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+                }}>
+                ❌ Reject
+              </button>
+              <button
+                onClick={() => setWfAction('return')}
+                title="Return for correction"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                  border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
+                  fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+                }}>
+                ↩ Return
+              </button>
+            </>
+          )}
           {doc.workflow_history?.length > 0 && (
             <button
               onClick={() => setShowWfHistory(true)}
@@ -2317,6 +2379,50 @@ export default function DocumentDetail() {
             The creator and any users listed below can edit this document.
             Admins can always edit.
           </div>
+
+          {/* Pending Access Requests Section */}
+          {pendingAccessRequests.length > 0 && (
+            <div style={{ marginBottom:16, padding:12, background:'#FFF9EC', border:'1px solid #BA7517',
+              borderRadius:8 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:'#854F0B', marginBottom:8 }}>
+                🔑 Pending Edit Access Requests ({pendingAccessRequests.length})
+              </div>
+              {pendingAccessRequests.map(req => (
+                <div key={req.id} style={{ marginBottom:8, padding:10, background:'#fff',
+                  border:'1px solid #e5e7eb', borderRadius:6 }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+                    <div>
+                      <div style={{ fontWeight:500, fontSize:13 }}>{req.requester?.name || 'User'}</div>
+                      <div style={{ fontSize:11, color:'#9ca3af' }}>{req.requester?.email}</div>
+                    </div>
+                  </div>
+                  {req.message && (
+                    <div style={{ fontSize:12, color:'#374151', marginBottom:8, fontStyle:'italic' }}>
+                      "{req.message}"
+                    </div>
+                  )}
+                  <div style={{ display:'flex', gap:6 }}>
+                    <button
+                      onClick={() => handleDecideAccessRequest(req.id, 'approve')}
+                      title="Approve this user as an editor"
+                      style={{ flex:1, padding:'6px 12px', borderRadius:6, border:'none',
+                        background:'#0F6E56', color:'#fff', cursor:'pointer',
+                        fontSize:12, fontWeight:600, fontFamily:'inherit' }}>
+                      ✅ Approve
+                    </button>
+                    <button
+                      onClick={() => handleDecideAccessRequest(req.id, 'deny')}
+                      title="Deny this access request"
+                      style={{ flex:1, padding:'6px 12px', borderRadius:6,
+                        border:'1px solid #e5e7eb', background:'#fff', color:'#374151',
+                        cursor:'pointer', fontSize:12, fontFamily:'inherit' }}>
+                      ✕ Deny
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div style={{ marginBottom:12 }}>
             <div style={{ fontSize:11, fontWeight:600, color:'#6b7280', marginBottom:6 }}>

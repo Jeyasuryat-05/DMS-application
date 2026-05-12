@@ -490,7 +490,7 @@ def seed_data(request):
             for key, val in defaults:
                 SystemConfig.objects.get_or_create(key=key, defaults={'value': val})
 
-        return Response({'message': f'Seeded {len(MASTER_DOC_TYPES)} document types successfully. Login: admin@npcil.gov.in / Admin@1234'})
+        return Response({'message': f'Seeded {len(MASTER_DOC_TYPES)} document types successfully. Login: EMP001 / Admin@1234 or admin@npcil.gov.in / Admin@1234'})
     except Exception as e:
         error_detail = traceback.format_exc()
         logger.error(f'Seed failed:\n{error_detail}')

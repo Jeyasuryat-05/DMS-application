@@ -14,18 +14,30 @@ export default function Documents() {
   const [showUpload, setShowUpload] = useState(searchParams.get('upload') === '1')
 
   const [filters, setFilters] = useState({
-    q: '', doc_type_id: '', status: '', confidential: '',
+    q: '', doc_number: '', doc_type_id: '', serial_no: '', version: '',
+    version_mode: 'all', status: '', confidential: '', flagged_for_deletion: '', limit: '100',
   })
 
   const STATUSES = ['Draft', 'Under Review', 'Approved', 'Rejected', 'Archived', 'Expired']
+  const VERSION_MODES = [
+    { value: 'all', label: 'All Versions' },
+    { value: 'latest', label: 'Latest Versions' },
+    { value: 'released', label: 'All Released Versions' },
+  ]
 
   const fetchDocs = useCallback(() => {
     setLoading(true)
     const params = {}
-    if (filters.q)           params.q = filters.q
-    if (filters.doc_type_id) params.doc_type_id = filters.doc_type_id
-    if (filters.status)      params.status = filters.status
-    if (filters.confidential !== '') params.confidential = filters.confidential === 'true'
+    if (filters.q)                    params.q = filters.q
+    if (filters.doc_number)           params.doc_number = filters.doc_number
+    if (filters.doc_type_id)          params.doc_type_id = filters.doc_type_id
+    if (filters.serial_no)            params.serial_no = filters.serial_no
+    if (filters.version)              params.version = filters.version
+    if (filters.version_mode)         params.version_mode = filters.version_mode
+    if (filters.status)               params.status = filters.status
+    if (filters.confidential !== '')  params.confidential = filters.confidential === 'true'
+    if (filters.flagged_for_deletion !== '') params.flagged_for_deletion = filters.flagged_for_deletion === 'true'
+    if (filters.limit)                params.limit = parseInt(filters.limit, 10) || 100
     documentsAPI.list(params)
       .then(r => setDocs(r.data))
       .finally(() => setLoading(false))
@@ -125,17 +137,46 @@ export default function Documents() {
 
       {/* Filters */}
       <Card style={{ marginBottom: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 12, alignItems: 'end' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 12, alignItems: 'end' }}>
           <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Search (title, doc number, USI)</label>
-            <input value={filters.q} onChange={e => setF('q', e.target.value)}
-              placeholder="Type to search…" style={{ width: '100%', boxSizing: 'border-box' }} />
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Document</label>
+            <input value={filters.doc_number} onChange={e => setF('doc_number', e.target.value)}
+              placeholder="Doc number…" style={{ width: '100%', boxSizing: 'border-box' }} />
           </div>
           <div>
             <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Document Type</label>
             <select value={filters.doc_type_id} onChange={e => setF('doc_type_id', e.target.value)} style={{ width: '100%' }}>
               <option value="">All Types</option>
               {docTypes.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Document Part</label>
+            <input value={filters.serial_no} onChange={e => setF('serial_no', e.target.value)}
+              placeholder="Part number…" style={{ width: '100%', boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Document Version</label>
+            <input value={filters.version} onChange={e => setF('version', e.target.value)}
+              placeholder="e.g. 1.0" style={{ width: '100%', boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Maximum Number of Hits</label>
+            <input type="number" min="1" value={filters.limit} onChange={e => setF('limit', e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box' }} />
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 12, alignItems: 'end', marginTop: 14 }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Search (title, project, USI)</label>
+            <input value={filters.q} onChange={e => setF('q', e.target.value)}
+              placeholder="Type to search…" style={{ width: '100%', boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Version Selection</label>
+            <select value={filters.version_mode} onChange={e => setF('version_mode', e.target.value)} style={{ width: '100%' }}>
+              {VERSION_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </div>
           <div>
@@ -153,10 +194,22 @@ export default function Documents() {
               <option value="false">Non-Confidential</option>
             </select>
           </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Deletion indicator</label>
+            <select value={filters.flagged_for_deletion} onChange={e => setF('flagged_for_deletion', e.target.value)} style={{ width: '100%' }}>
+              <option value="">All</option>
+              <option value="true">Flagged for Deletion</option>
+              <option value="false">Not Flagged</option>
+            </select>
+          </div>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            Use the search form above to filter documents by number, part, title, project, or USI.
+          </div>
           <Btn label="Clear Filters" size="sm"
-            onClick={() => setFilters({ q: '', doc_type_id: '', status: '', confidential: '' })} />
+            onClick={() => setFilters({ q: '', doc_number: '', doc_type_id: '', serial_no: '', version: '', version_mode: 'all', status: '', confidential: '', flagged_for_deletion: '', limit: '100' })} />
         </div>
       </Card>
 
