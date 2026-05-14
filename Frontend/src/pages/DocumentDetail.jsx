@@ -368,6 +368,7 @@ export default function DocumentDetail() {
   const [checklistUploading, setChecklistUploading] = useState({})  // taskId -> bool
   const [checklistFiles, setChecklistFiles]         = useState({})  // taskId -> file
   const [shareLink, setShareLink] = useState(null)
+  const [shareCopySuccess, setShareCopySuccess] = useState(false)
   const [refDocId, setRefDocId] = useState('')
   const [refNote, setRefNote] = useState('')
   const [versionFile, setVersionFile] = useState(null)
@@ -605,10 +606,52 @@ export default function DocumentDetail() {
     refresh()
   }
 
+  function normalizeShareLink(rawLink) {
+    if (!rawLink) return rawLink
+    try {
+      const url = new URL(rawLink, window.location.origin)
+      const isDocRoute = url.pathname.startsWith('/documents')
+      if (isDocRoute && url.origin !== window.location.origin) {
+        return `${window.location.origin}${url.pathname}${url.search}`
+      }
+      return url.href
+    } catch (e) {
+      if (rawLink.startsWith('/')) {
+        return `${window.location.origin}${rawLink}`
+      }
+      return rawLink
+    }
+  }
+
   async function handleShare(version) {
     const res = await documentsAPI.getShareLink(id, version)
-    setShareLink(res.data)
+    setShareLink({ ...res.data, link: normalizeShareLink(res.data.link) })
+    setShareCopySuccess(false)
     setShowShareModal(true)
+  }
+
+  async function copyShareLink() {
+    if (!shareLink?.link) return
+    try {
+      const link = normalizeShareLink(shareLink.link)
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(link)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = link
+        textarea.style.position = 'fixed'
+        textarea.style.left = '-9999px'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      setShareCopySuccess(true)
+      setTimeout(() => setShareCopySuccess(false), 2000)
+    } catch (e) {
+      alert('Copy failed. Please select the link and copy it manually.')
+    }
   }
 
   async function handleDownload(fileId, filename) {
@@ -2564,8 +2607,12 @@ export default function DocumentDetail() {
           <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 14px' }}>
             Version: <strong>{shareLink.version}</strong> — {shareLink.version === 'latest' ? 'This link always points to the latest version.' : 'This link is pinned to this specific version.'}
           </p>
+          {shareCopySuccess && (
+            <p style={{ margin: '0 0 10px', color: '#16a34a', fontSize: 13 }}>Copied to clipboard.</p>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <Btn label="Copy Link" variant="primary" onClick={() => { navigator.clipboard.writeText(shareLink.link); }} />
+            <Btn label="Copy Link" variant="primary" onClick={copyShareLink} />
+            <Btn label="Open Link" onClick={() => window.open(shareLink.link, '_blank')} />
             <Btn label="Close" onClick={() => setShowShareModal(false)} />
           </div>
         </Modal>

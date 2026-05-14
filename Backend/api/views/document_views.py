@@ -1,5 +1,6 @@
 import os, uuid, json, traceback, mimetypes
 from datetime import datetime, timedelta
+from django.conf import settings
 from django.utils import timezone
 from django.http import FileResponse, HttpResponse
 from django.db import transaction
@@ -854,7 +855,8 @@ def share_link(request, doc_id):
     except Document.DoesNotExist:
         return Response({'error': 'Not found'}, status=404)
     version = request.query_params.get('version')
-    link = f'/documents/{doc_id}' + (f'?v={version}' if version else '')
+    frontend_base = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+    link = f'{frontend_base}/documents/{doc_id}' + (f'?v={version}' if version else '')
     return Response({'link': link, 'doc_number': doc.doc_number, 'version': version or 'latest'})
 
 
