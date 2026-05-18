@@ -88,6 +88,7 @@ urlpatterns = [
     path('admin/logs/creations', admin_views.creation_logs),
     path('admin/logs/creations/download', admin_views.creation_logs_download),
     path('admin/logs/summary', admin_views.logs_summary),
+    path('admin/cover-page-template', admin_views.cover_page_template),
 
     # ── Alerts ────────────────────────────────────────────────────────────────
     path('alerts/run-job', alert_views.trigger_alert_job),

@@ -10,7 +10,7 @@ from rest_framework.response import Response
 
 from api.models import (
     User, DocumentType, DocTypeFileFormat, WorkflowConfig, AlertConfig,
-    NumberReservation, SystemConfig, Document, AuditLog, WorkflowLevel,
+    NumberReservation, SystemConfig, Document, AuditLog, WorkflowLevel, CoverPageTemplate,
 )
 from api.authentication import hash_password, cfg, set_cfg
 
@@ -706,3 +706,33 @@ def logs_summary(request):
         else:
             bucket['creations'] += 1
     return Response(sorted(daily.values(), key=lambda x: x['date'], reverse=True))
+
+
+@api_view(['GET', 'PUT'])
+def cover_page_template(request):
+    """Get or save the cover page template configuration."""
+    if request.method == 'GET':
+        try:
+            template = CoverPageTemplate.objects.first()
+            if not template:
+                return Response({'fields': []})
+            return Response({'fields': template.fields})
+        except Exception as e:
+            logger.error(f"Error getting cover page template: {str(e)}")
+            return Response({'fields': []})
+
+    elif request.method == 'PUT':
+        if request.user.role not in ['System Admin', 'Sub-Admin']:
+            return Response({'detail': 'Permission denied'}, status=403)
+
+        try:
+            fields = request.data.get('fields', [])
+            template, _ = CoverPageTemplate.objects.get_or_create(id=1)
+            template.fields = fields
+            template.updated_by = request.user
+            template.save()
+            return Response({'detail': 'Cover page template saved', 'fields': template.fields})
+        except Exception as e:
+            logger.error(f"Error saving cover page template: {str(e)}")
+            return Response({'detail': str(e)}, status=400)
+

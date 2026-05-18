@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { workflowAPI, authAPI } from '../api'
 import NotificationBell from './NotificationBell'
 
-const ADMIN_ROLES = ['System Admin', 'Sub Admin']
+const ADMIN_ROLES = ['System Admin', 'Sub Admin', 'Sub-Admin']
 
 const NAV = [
   { to: '/',          icon: '🏠', label: 'Dashboard' },

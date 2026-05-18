@@ -349,3 +349,12 @@ class NumberReservation(models.Model):
 
     class Meta:
         db_table = 'number_reservations'
+
+
+class CoverPageTemplate(models.Model):
+    fields      = models.JSONField(default=list)
+    updated_at  = models.DateTimeField(auto_now=True)
+    updated_by  = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, db_column='updated_by_id')
+
+    class Meta:
+        db_table = 'cover_page_templates'

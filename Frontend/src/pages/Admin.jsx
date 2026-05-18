@@ -1540,10 +1540,177 @@ function ActivityLogsPanel({ toast }) {
 }
 
 
+// ─── Cover Page Template Manager ──────────────────────────────────────────────
+const COVER_PAGE_FIELD_TYPES = [
+  { value: 'document_title', label: 'Document Title', hint: 'Taken from upload form' },
+  { value: 'document_number', label: 'Document Number', hint: 'Auto-generated' },
+  { value: 'revision', label: 'Revision Number', hint: 'From document metadata' },
+  { value: 'prepared_by', label: 'Prepared By', hint: 'Current logged-in user' },
+  { value: 'approved_by', label: 'Approved By', hint: 'User from metadata' },
+  { value: 'date_issued', label: 'Date Issued', hint: 'Current date' },
+  { value: 'department', label: 'Department', hint: 'User department' },
+  { value: 'classification', label: 'Classification', hint: 'Confidential/Internal/Public' },
+  { value: 'project_name', label: 'Project Name', hint: 'Custom text field' },
+  { value: 'status', label: 'Status', hint: 'Draft/Final/Archived' },
+  { value: 'reference', label: 'Reference Number', hint: 'Custom text field' },
+  { value: 'custom_text', label: 'Custom Text', hint: 'Editable text field' },
+]
+
+function CoverPageManager({ toast }) {
+  const [fields, setFields] = useState([])
+  const [availableFields, setAvailableFields] = useState(COVER_PAGE_FIELD_TYPES)
+  const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    adminAPI.getCoverPageTemplate()
+      .then(r => setFields(r.data?.fields || []))
+      .catch(() => setFields([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await adminAPI.saveCoverPageTemplate({ fields })
+      toast('Cover page template saved', 'success')
+    } catch (e) {
+      toast(e.response?.data?.detail || 'Save failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function addField() {
+    const unused = availableFields.filter(f => !fields.some(x => x.type === f.value))
+    if (unused.length === 0) { toast('All available fields already added', 'error'); return }
+    const newField = { type: unused[0].value, label: unused[0].label, show: true, order: fields.length }
+    setFields([...fields, newField])
+  }
+
+  function removeField(idx) {
+    setFields(f => f.filter((_, i) => i !== idx))
+  }
+
+  function toggleField(idx) {
+    setFields(f => f.map((x, i) => i === idx ? {...x, show: !x.show} : x))
+  }
+
+  function moveField(idx, dir) {
+    const newFields = [...fields]
+    const target = idx + dir
+    if (target < 0 || target >= newFields.length) return
+    ;[newFields[idx], newFields[target]] = [newFields[target], newFields[idx]]
+    setFields(newFields)
+  }
+
+  if (loading) return <div style={{padding:32, textAlign:'center', color:C.gray}}>Loading…</div>
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.blue, marginBottom: 4 }}>
+          📄 Cover Page Template Configuration
+        </div>
+        <div style={{ fontSize: 12, color: C.gray }}>
+          Customize which fields appear on the auto-generated cover page for Word and PDF uploads.
+          Fields will be populated automatically with document metadata and user information.
+        </div>
+      </div>
+
+      {/* Field list */}
+      <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10,
+        overflow: 'hidden', marginBottom: 16 }}>
+        {fields.length === 0 ? (
+          <div style={{ padding: 32, textAlign: 'center', color: C.gray, fontSize: 13 }}>
+            No fields configured. Click "+ Add Field" to start.
+          </div>
+        ) : (
+          <div style={{ overflow: 'x' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: C.bg, borderBottom: `2px solid ${C.accent}` }}>
+                  <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: C.blue }}>Field</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: C.blue, width: 100 }}>Show</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: C.blue, width: 160 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fields.map((f, idx) => {
+                  const meta = availableFields.find(x => x.value === f.type)
+                  return (
+                    <tr key={idx} style={{ borderBottom: `1px solid ${C.border}` }}
+                      onMouseEnter={e => e.currentTarget.style.background = C.rowHover}
+                      onMouseLeave={e => e.currentTarget.style.background = ''}>
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 500, color: '#111' }}>{f.label}</div>
+                        <div style={{ fontSize: 11, color: C.gray }}>{meta?.hint}</div>
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                        <input type="checkbox" checked={f.show} onChange={() => toggleField(idx)} />
+                      </td>
+                      <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', display: 'flex', gap: 4 }}>
+                        <button onClick={() => moveField(idx, -1)} disabled={idx === 0}
+                          style={{ background: 'none', border: 'none', cursor: idx === 0 ? 'not-allowed' : 'pointer',
+                            fontSize: 14, color: idx === 0 ? C.border : C.gray }}>↑</button>
+                        <button onClick={() => moveField(idx, 1)} disabled={idx === fields.length - 1}
+                          style={{ background: 'none', border: 'none', cursor: idx === fields.length - 1 ? 'not-allowed' : 'pointer',
+                            fontSize: 14, color: idx === fields.length - 1 ? C.border : C.gray }}>↓</button>
+                        <button onClick={() => removeField(idx)}
+                          style={{ padding: '2px 8px', borderRadius: 5, border: `1px solid ${C.red}`,
+                            background: '#fff', color: C.red, cursor: 'pointer', fontSize: 11 }}>Remove</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Add field button */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <GBtn label="+ Add Field" onClick={addField} color={C.green} />
+        <GBtn label="Save Template" onClick={save} disabled={saving} color={C.blue} />
+      </div>
+
+      {/* Preview */}
+      {fields.length > 0 && (
+        <div style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.blue, marginBottom: 12 }}>
+            📋 Preview — Fields that will appear on cover page:
+          </div>
+          <div style={{ background: '#fff', border: `1px dashed ${C.border}`, borderRadius: 8,
+            padding: 24, minHeight: 200, fontFamily: 'georgia, serif' }}>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#111' }}>COVER PAGE</div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '12px 20px' }}>
+              {fields.filter(f => f.show).map((f, idx) => (
+                <div key={idx} style={{ display: 'contents' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: C.gray, textAlign: 'right' }}>
+                    {f.label}:
+                  </div>
+                  <div style={{ fontSize: 12, color: '#374151' }}>
+                    [auto-populated]
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Admin page ──────────────────────────────────────────────────────────
 const TABS = [
   { id:'users',    label:'👤 Users' },
   { id:'doctypes', label:'📂 Document Types' },
+  { id:'cover',    label:'📄 Cover Page' },
   { id:'config',   label:'⚙️ System Config' },
   { id:'flagged',  label:'🚩 Flagged for Deletion' },
   { id:'logs',     label:'📋 Activity Logs' },
@@ -1576,6 +1743,7 @@ export default function Admin() {
 
       {tab==='users'    && <UsersGrid             toast={showToast} />}
       {tab==='doctypes' && <DocTypesGrid          toast={showToast} />}
+      {tab==='cover'    && <CoverPageManager      toast={showToast} />}
       {tab==='config'   && <SystemConfigPanel     toast={showToast} />}
       {tab==='flagged'  && <FlaggedDocumentsPanel toast={showToast} />}
       {tab==='logs'     && <ActivityLogsPanel     toast={showToast} />}
