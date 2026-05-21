@@ -15,6 +15,9 @@ from api.models import (
     WorkflowInstance, WorkflowHistorySnapshot, User, EditAccessRequest,
 )
 from api import email_utils
+from api.authentication import (
+    require_read, require_create, require_edit, require_delete, _flag_check,
+)
 
 UPLOAD_DIR = 'uploads'
 ALLOWED_FORMATS = {
@@ -141,7 +144,11 @@ def _doc_to_dict(d):
 @parser_classes([MultiPartParser, FormParser, JSONParser])
 def list_create_documents(request):
     if request.method == 'GET':
+        ok, resp = _flag_check(request.user, 'can_read', 'Read')
+        if not ok: return resp
         return _list_documents(request)
+    ok, resp = _flag_check(request.user, 'can_create', 'Create')
+    if not ok: return resp
     return _create_document(request)
 
 
@@ -397,9 +404,15 @@ def _create_document(request):
 @parser_classes([MultiPartParser, FormParser, JSONParser])
 def get_update_delete_document(request, doc_id):
     if request.method == 'GET':
+        ok, resp = _flag_check(request.user, 'can_read', 'Read')
+        if not ok: return resp
         return _get_document(request, doc_id)
     elif request.method == 'PATCH':
+        ok, resp = _flag_check(request.user, 'can_edit', 'Edit')
+        if not ok: return resp
         return _update_document(request, doc_id)
+    ok, resp = _flag_check(request.user, 'can_delete', 'Delete')
+    if not ok: return resp
     return _delete_document(request, doc_id)
 
 
@@ -757,6 +770,7 @@ def _delete_document(request, doc_id):
 
 @api_view(['POST'])
 @parser_classes([JSONParser])
+@require_edit
 def checkout(request, doc_id):
     try:
         doc = Document.objects.get(id=doc_id)
@@ -783,6 +797,7 @@ def checkout(request, doc_id):
 
 @api_view(['POST'])
 @parser_classes([JSONParser])
+@require_edit
 def add_feedback(request, doc_id):
     try:
         tagged_user_id = request.data.get('tagged_user_id')
@@ -836,6 +851,7 @@ def add_feedback(request, doc_id):
 
 @api_view(['POST'])
 @parser_classes([JSONParser])
+@require_edit
 def add_reference(request, doc_id):
     try:
         DocumentReference.objects.create(
@@ -849,6 +865,7 @@ def add_reference(request, doc_id):
 
 
 @api_view(['GET'])
+@require_read
 def share_link(request, doc_id):
     try:
         doc = Document.objects.get(id=doc_id)
@@ -862,6 +879,7 @@ def share_link(request, doc_id):
 
 @api_view(['POST'])
 @parser_classes([MultiPartParser, FormParser])
+@require_create
 @transaction.atomic
 def upload_version(request, doc_id):
     try:
@@ -943,6 +961,12 @@ def upload_version(request, doc_id):
 def document_editors(request, doc_id):
     """List or replace the editors granted edit access to this document.
     Only the document creator (or an admin) can manage the editor list."""
+    if request.method == 'GET':
+        ok, resp = _flag_check(request.user, 'can_read', 'Read')
+        if not ok: return resp
+    else:
+        ok, resp = _flag_check(request.user, 'can_edit', 'Edit')
+        if not ok: return resp
     try:
         doc = Document.objects.get(id=doc_id, is_deleted=False)
     except Document.DoesNotExist:
@@ -984,6 +1008,7 @@ def document_editors(request, doc_id):
 
 @api_view(['POST'])
 @parser_classes([JSONParser])
+@require_edit
 def request_edit_access(request, doc_id):
     """A non-editor authenticated user requests edit access on this document.
     Logged in the audit trail; an email is sent to the creator if SMTP is set
@@ -1077,6 +1102,7 @@ def incoming_access_requests(request):
 
 @api_view(['POST'])
 @parser_classes([JSONParser])
+@require_edit
 def decide_access_request(request, request_id):
     """Owner approves or denies an edit-access request.
     POST body: { action: 'approve' | 'deny' }. Approve adds the requester
@@ -1141,6 +1167,7 @@ def decide_access_request(request, request_id):
 
 
 @api_view(['POST'])
+@require_edit
 def reassign_doc_number(request, doc_id):
     """Admin-only: update project/USI and regenerate the doc number."""
     if getattr(request.user, 'role', '') != 'System Admin':
@@ -1225,6 +1252,7 @@ def _can_edit_doc(user, doc):
 
 
 @api_view(['GET'])
+@require_read
 def download_file(request, doc_id, file_id):
     try:
         f = DocumentFile.objects.select_related('document').get(id=file_id, document_id=doc_id)
@@ -1250,6 +1278,7 @@ def download_file(request, doc_id, file_id):
 
 
 @api_view(['GET'])
+@require_read
 def view_file(request, doc_id, file_id):
     try:
         f = DocumentFile.objects.select_related('document').get(id=file_id, document_id=doc_id)
@@ -1294,6 +1323,7 @@ def view_file(request, doc_id, file_id):
 
 @api_view(['POST'])
 @parser_classes([MultiPartParser, FormParser])
+@require_create
 def add_file(request, doc_id):
     try:
         doc = Document.objects.get(id=doc_id)
@@ -1351,6 +1381,7 @@ def add_file(request, doc_id):
 
 
 @api_view(['DELETE'])
+@require_delete
 def delete_file(request, doc_id, file_id):
     try:
         doc = Document.objects.get(id=doc_id)
@@ -1400,6 +1431,7 @@ def delete_file(request, doc_id, file_id):
 
 
 @api_view(['POST'])
+@require_delete
 def flag_deletion(request, doc_id):
     if request.method == 'POST':
         try:
@@ -1426,6 +1458,7 @@ def flag_deletion(request, doc_id):
 
 
 @api_view(['DELETE'])
+@require_delete
 def unflag_deletion(request, doc_id):
     try:
         doc = Document.objects.get(id=doc_id, is_deleted=False)
@@ -1440,6 +1473,7 @@ def unflag_deletion(request, doc_id):
 
 
 @api_view(['GET'])
+@require_read
 def file_access_stats(request, doc_id):
     try:
         Document.objects.get(id=doc_id)

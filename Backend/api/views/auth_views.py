@@ -122,6 +122,8 @@ def login(request):
         return Response({'error': 'Incorrect employee ID or password'}, status=400)
     if not user.is_active:
         return Response({'error': 'Account deactivated'}, status=403)
+    if not user.dms_enabled:
+        return Response({'error': 'DMS access is not enabled for this account. Contact your administrator.'}, status=403)
     user.last_login = datetime.utcnow()
     user.save(update_fields=['last_login'])
     return Response({

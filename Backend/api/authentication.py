@@ -87,6 +87,69 @@ class JWTAuthentication(BaseAuthentication):
 
 
 class IsAuthenticatedUser(BasePermission):
+    # A user with `dms_enabled=False` may have a valid token (issued before the
+    # admin revoked access) but must be denied at every endpoint — checking
+    # here is the defence-in-depth complement to the login-time check.
+    message = 'DMS access is not enabled for this account.'
+
     def has_permission(self, request, view):
         from api.models import User
-        return bool(request.user and isinstance(request.user, User))
+        if not (request.user and isinstance(request.user, User)):
+            return False
+        if not request.user.dms_enabled:
+            return False
+        return True
+
+
+# ─── Permission-flag helpers ──────────────────────────────────────────────────
+# These guard endpoints by the per-user `can_read / can_create / can_edit /
+# can_delete` flags managed in Admin → Users. The Admin UI surfaces these
+# flags; without enforcement here they were purely cosmetic.
+
+def _flag_check(user, attr, action):
+    """Return (ok, error_response_or_none). Always allow System Admins."""
+    from rest_framework.response import Response
+    if getattr(user, 'role', '') == 'System Admin':
+        return True, None
+    if not getattr(user, attr, False):
+        return False, Response(
+            {'error': f'You do not have {action} access. Contact your administrator.'},
+            status=403,
+        )
+    return True, None
+
+
+def require_read(view_func):
+    from functools import wraps
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        ok, resp = _flag_check(request.user, 'can_read', 'Read')
+        return resp if not ok else view_func(request, *args, **kwargs)
+    return wrapped
+
+
+def require_create(view_func):
+    from functools import wraps
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        ok, resp = _flag_check(request.user, 'can_create', 'Create')
+        return resp if not ok else view_func(request, *args, **kwargs)
+    return wrapped
+
+
+def require_edit(view_func):
+    from functools import wraps
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        ok, resp = _flag_check(request.user, 'can_edit', 'Edit')
+        return resp if not ok else view_func(request, *args, **kwargs)
+    return wrapped
+
+
+def require_delete(view_func):
+    from functools import wraps
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        ok, resp = _flag_check(request.user, 'can_delete', 'Delete')
+        return resp if not ok else view_func(request, *args, **kwargs)
+    return wrapped

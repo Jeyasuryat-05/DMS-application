@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from api.models import Document, DocumentType, AuditLog, WorkflowInstance
+from api.authentication import require_read
 
 
 def _iso(dt):
@@ -11,6 +12,7 @@ def _iso(dt):
 
 
 @api_view(['GET'])
+@require_read
 def summary(request):
     try:
         total = Document.objects.filter(is_deleted=False).count()
@@ -47,6 +49,7 @@ def summary(request):
 
 
 @api_view(['GET'])
+@require_read
 def by_status(request):
     try:
         rows = Document.objects.filter(is_deleted=False).values('status').annotate(count=Count('id'))
@@ -60,6 +63,7 @@ def by_status(request):
 
 
 @api_view(['GET'])
+@require_read
 def by_type(request):
     try:
         rows = (
@@ -73,6 +77,7 @@ def by_type(request):
 
 
 @api_view(['GET'])
+@require_read
 def by_type_status(request):
     try:
         rows = (
@@ -96,6 +101,7 @@ def by_type_status(request):
 
 
 @api_view(['GET'])
+@require_read
 def expiring(request):
     try:
         days = int(request.query_params.get('days', 90))
@@ -118,6 +124,7 @@ def expiring(request):
 
 
 @api_view(['GET'])
+@require_read
 def audit(request):
     try:
         doc_id = request.query_params.get('doc_id')

@@ -4,14 +4,17 @@ import { documentsAPI, adminAPI } from '../api'
 import { Badge, Btn, Card, Table, Spinner, Input, Select, Metric } from '../components/ui'
 import UploadModal from '../components/UploadModal'
 import { fmtDate } from '../utils/dates'
+import { useAuth } from '../hooks/useAuth'
 
 export default function Documents() {
+  const { user } = useAuth()
+  const canCreate = !!(user?.can_create || user?.role === 'System Admin')
   const nav = useNavigate()
   const [searchParams] = useSearchParams()
   const [docs, setDocs] = useState([])
   const [docTypes, setDocTypes] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showUpload, setShowUpload] = useState(searchParams.get('upload') === '1')
+  const [showUpload, setShowUpload] = useState(searchParams.get('upload') === '1' && canCreate)
 
   const [filters, setFilters] = useState({
     q: '', doc_number: '', doc_type_id: '', serial_no: '', version: '',
@@ -124,7 +127,9 @@ export default function Documents() {
           <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700 }}>Documents</h1>
           <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>Manage all engineering documents</p>
         </div>
-        <Btn label="+ Create Document" variant="primary" onClick={() => setShowUpload(true)} />
+        {canCreate && (
+          <Btn label="+ Create Document" variant="primary" onClick={() => setShowUpload(true)} />
+        )}
       </div>
 
       {/* Summary metrics */}
