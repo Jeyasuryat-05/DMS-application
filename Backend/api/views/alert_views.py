@@ -5,6 +5,7 @@ from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 
 from api.models import Document, AlertLog, AlertRecipient, AlertConfig, AuditLog, User
+from api.authentication import require_read, require_edit
 
 _IST = timedelta(hours=5, minutes=30)
 
@@ -132,6 +133,7 @@ def trigger_alert_job(request):
 
 
 @api_view(['GET'])
+@require_read
 def get_alert_logs(request):
     doc_id = request.query_params.get('doc_id')
     skip = int(request.query_params.get('skip', 0))
@@ -151,6 +153,7 @@ def get_alert_logs(request):
 
 
 @api_view(['GET'])
+@require_read
 def get_alert_configs(request):
     configs = AlertConfig.objects.select_related('doc_type').all()
     return Response([
@@ -166,6 +169,7 @@ def get_alert_configs(request):
 
 @api_view(['PUT'])
 @parser_classes([JSONParser])
+@require_edit
 def update_alert_config(request, doc_type_id):
     cfg, _ = AlertConfig.objects.get_or_create(doc_type_id=doc_type_id)
     data = request.data
@@ -177,6 +181,7 @@ def update_alert_config(request, doc_type_id):
 
 
 @api_view(['GET'])
+@require_read
 def upcoming_expirations(request):
     days = int(request.query_params.get('days', 90))
     now_ist = _now_ist()

@@ -12,6 +12,7 @@ from api.models import (
     AuditLog, WorkflowHistorySnapshot, User,
 )
 from api import email_utils
+from api.authentication import require_read, require_edit
 
 STATUS_MAP = {
     'Prepare':  ('05', 'Draft'),
@@ -109,6 +110,9 @@ def all_pending(request):
 @parser_classes([JSONParser])
 @transaction.atomic
 def initiate_workflow(request, doc_id):
+    if not request.user.can_edit:
+        return Response({'error': 'You do not have edit access. Workflow initiation requires Edit permission.'}, status=403)
+
     try:
         doc = Document.objects.get(id=doc_id)
     except Document.DoesNotExist:
@@ -618,6 +622,7 @@ def complete_checklist(request, doc_id):
 
 @api_view(['POST'])
 @parser_classes([JSONParser])
+@require_edit
 @transaction.atomic
 def return_document(request, doc_id):
     try:

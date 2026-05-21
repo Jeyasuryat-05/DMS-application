@@ -116,6 +116,173 @@ function Cell({ value, onChange, type='text', options, readOnly, width }) {
   )
 }
 
+// ─── SAP Employee Master details modal ───────────────────────────────────────
+// Group the 99 SAP fields by section. `date` fields get a date input.
+const SAP_GROUPS = [
+  { title: 'Identity', fields: [
+    ['personnel_number','Personnel Number'],
+    ['employee_title','Title'],
+    ['employee_title_text','Title Description'],
+    ['employee_full_name','Full Name'],
+    ['employee_name_in_hindi','Name (Hindi)'],
+    ['gender_code','Gender Code'],
+    ['gender_description','Gender Description'],
+    ['date_of_birth','Date of Birth','date'],
+    ['pan_number','PAN'],
+  ]},
+  { title: 'Employment', fields: [
+    ['employment_status','Status Code'],
+    ['employment_status_text','Status Text'],
+    ['employee_group_code','Group Code'],
+    ['employee_group_text','Group Text'],
+    ['employee_sub_group_code','Sub-Group Code'],
+    ['employee_sub_group_text','Sub-Group Text'],
+    ['employee_type_code','Type Code'],
+    ['employee_type_text','Type Text'],
+    ['union_membership_code','Union Code'],
+    ['union_membership_text','Union Text'],
+    ['executive_category','Executive Cat'],
+    ['executive_category_text','Executive Cat Text'],
+    ['gazetted_category','Gazetted Cat'],
+    ['gazetted_category_text','Gazetted Cat Text'],
+    ['date_of_joining','Date of Joining','date'],
+    ['date_of_retirement','Date of Retirement','date'],
+    ['years_of_service','25 Yrs Service','date'],
+  ]},
+  { title: 'Organisation', fields: [
+    ['personnel_area_code','Pers Area Code'],
+    ['personnel_area_text','Pers Area Text'],
+    ['personnel_sub_area_code','Pers Sub-Area'],
+    ['personnel_sub_area_text','Pers Sub-Area Text'],
+    ['department_code','Department Code'],
+    ['department_text','Department Text'],
+    ['cost_center_code','Cost Center'],
+    ['work_schedule_rule','Work Schedule Rule'],
+    ['work_schedule_rule_text','Work Schedule Text'],
+  ]},
+  { title: 'Position / Designation', fields: [
+    ['position_id','Position ID'],
+    ['position_text','Position Text'],
+    ['pay_level','Pay Level'],
+    ['cadre_code','Cadre'],
+    ['cadre_description','Cadre Description'],
+    ['functional_designation_1','Func Designation 1'],
+    ['functional_designation_text_1','Func Designation Text 1'],
+    ['functional_designation_2','Func Designation 2'],
+    ['functional_designation_text_2','Func Designation Text 2'],
+    ['functional_designation_3','Func Designation 3'],
+    ['functional_designation_text_3','Func Designation Text 3'],
+    ['functional_designation_4','Func Designation 4'],
+    ['functional_designation_text_4','Func Designation Text 4'],
+  ]},
+  { title: 'Contact', fields: [
+    ['system_user_id','System User ID'],
+    ['mobile_number','Mobile'],
+    ['email_address','Email Address'],
+    ['extension','Extension'],
+  ]},
+  { title: 'Reporting Officers', fields:
+    Array.from({length:20},(_,i)=>[`reporting_officer_id_${i+1}`,`Officer ID ${i+1}`])
+      .concat(Array.from({length:20},(_,i)=>[`reporting_user_id_${i+1}`,`User ID ${i+1}`]))
+  },
+  { title: 'Other', fields: [
+    ['cmd_id','CMD ID'],
+    ['om_attribute_code','OM Attr Code'],
+    ['om_attribute_desc','OM Attr Description'],
+    ['last_changed_date','Last Changed','date'],
+    ['last_changed_by','Last Changed By'],
+    ['sap_updated_at','SAP Updated At'],
+  ]},
+]
+
+function SapDetailsModal({ user, onClose, onSave }) {
+  const [form, setForm] = useState(() => {
+    const f = {}
+    SAP_GROUPS.forEach(g => g.fields.forEach(([k]) => { f[k] = user[k] ?? '' }))
+    return f
+  })
+  const [saving, setSaving] = useState(false)
+
+  function addYears(isoDate, years) {
+    if (!isoDate) return ''
+    // Expect strict YYYY-MM-DD from <input type="date">. Reject anything else
+    // (e.g. partially-typed years like "275760-01-01") so we don't compute
+    // garbage and feed it back into the input.
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
+    if (!m) return ''
+    const y = parseInt(m[1], 10) + years
+    if (y < 1900 || y > 2100) return ''
+    return `${String(y).padStart(4, '0')}-${m[2]}-${m[3]}`
+  }
+
+  function set(k, v) {
+    setForm(f => {
+      const next = { ...f, [k]: v }
+      // Auto-fill derived dates only when target is empty.
+      if (k === 'date_of_birth' && !f.date_of_retirement) {
+        next.date_of_retirement = addYears(v, 58)
+      }
+      if (k === 'date_of_joining' && !f.years_of_service) {
+        next.years_of_service = addYears(v, 25)
+      }
+      return next
+    })
+  }
+
+  async function save() {
+    setSaving(true)
+    try { await onSave(form) } finally { setSaving(false) }
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:9000,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:20,
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:'#fff', borderRadius:12, width:'min(1100px, 100%)', maxHeight:'92vh',
+        display:'flex', flexDirection:'column', boxShadow:'0 10px 40px rgba(0,0,0,0.25)',
+      }}>
+        <div style={{ padding:'16px 22px', borderBottom:`1px solid ${C.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div>
+            <div style={{ fontSize:16, fontWeight:700, color:C.blue }}>SAP Employee Master Details</div>
+            <div style={{ fontSize:13, color:C.gray, marginTop:2 }}>{user.name} · {user.employee_id || user.email}</div>
+          </div>
+          <button onClick={onClose} style={{ border:'none', background:'none', fontSize:22, cursor:'pointer', color:C.gray }}>×</button>
+        </div>
+        <div style={{ padding:'18px 22px', overflowY:'auto', flex:1 }}>
+          {SAP_GROUPS.map(group => (
+            <div key={group.title} style={{ marginBottom:22 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:C.accent, marginBottom:10, paddingBottom:6, borderBottom:`1px solid ${C.border}` }}>
+                {group.title}
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))', gap:'10px 14px' }}>
+                {group.fields.map(([key, label, type]) => (
+                  <label key={key} style={{ display:'flex', flexDirection:'column', fontSize:12 }}>
+                    <span style={{ color:C.gray, marginBottom:3 }}>{label}</span>
+                    <input
+                      type={type === 'date' ? 'date' : 'text'}
+                      value={form[key] ?? ''}
+                      onChange={e => set(key, e.target.value)}
+                      {...(type === 'date' ? { min: '1900-01-01', max: '2100-12-31' } : {})}
+                      style={{ padding:'6px 8px', border:`1px solid ${C.border}`, borderRadius:6, fontSize:13 }}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding:'12px 22px', borderTop:`1px solid ${C.border}`, display:'flex', gap:8, justifyContent:'flex-end' }}>
+          <GBtn label="Cancel" onClick={onClose} color={C.gray} />
+          <GBtn label={saving ? 'Saving…' : 'Save SAP details'} onClick={save} color={C.green} disabled={saving} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 // ─── Users Grid ──────────────────────────────────────────────────────────────
 const ROLES = ['Document Creator','Checker','Reviewer','Approver','EIC','Read-Only','System Admin','Sub-Admin']
 const DEPTS = ['Design','QA','Safety','Projects','IT','Management','Procurement','Civil','Electrical','Mechanical','Finance','HR']
@@ -127,12 +294,41 @@ function UsersGrid({ toast }) {
   const [search, setSearch]   = useState('')
   const [loading, setLoading] = useState(true)
   const [filter, setFilter]   = useState({ department:'', role:'', is_active:'' })
+  const [ordering, setOrdering] = useState('')   // '' | 'name' | '-name' etc.
+  const [sapEditUser, setSapEditUser] = useState(null)   // user being edited in SAP modal
+
+  function toggleSort(field) {
+    if (!field) return
+    setOrdering(prev =>
+      prev === field ? `-${field}` :
+      prev === `-${field}` ? '' :
+      field
+    )
+  }
+
+  async function saveSapDetails(form) {
+    try {
+      const cleaned = Object.fromEntries(
+        Object.entries(form).map(([k,v]) => [k, v === '' ? null : v])
+      )
+      await adminAPI.updateUser(sapEditUser.id, cleaned)
+      toast('SAP details saved', 'success')
+      setSapEditUser(null)
+      load()
+    } catch (e) {
+      toast(e.response?.data?.detail || e.response?.data?.error || 'Save failed', 'error')
+    }
+  }
 
   const load = useCallback(() => {
     setLoading(true)
-    adminAPI.listUsers({ q: search || undefined, ...Object.fromEntries(Object.entries(filter).filter(([,v])=>v!=='')) })
+    adminAPI.listUsers({
+      q: search || undefined,
+      ...Object.fromEntries(Object.entries(filter).filter(([,v])=>v!=='')),
+      ...(ordering ? { ordering } : {}),
+    })
       .then(r => setRows(r.data)).finally(() => setLoading(false))
-  }, [search, filter])
+  }, [search, filter, ordering])
 
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t) }, [load])
 
@@ -221,13 +417,57 @@ function UsersGrid({ toast }) {
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
           <thead>
             <tr>
-              {['Employee ID','SAP Username','Name','Email','Department','Role','DMS','Create','Edit','Delete','Read','Active','Actions'].map(h=>(
-                <th key={h} style={thStyle}>{h}</th>
-              ))}
+              {[
+                ['Employee ID','employee_id'],['SAP Username','sap_username'],['Name','name'],['Email','email'],['Department','department'],['Role','role'],
+                ['DMS',null],['Create',null],['Edit',null],['Delete',null],['Read',null],['Active','is_active'],['Actions',null],
+                // ─── SAP Employee Master fields (read-only) ───
+                ['Personnel #','personnel_number'],['Title','employee_title'],['Title Text','employee_title_text'],['Full Name','employee_full_name'],
+                ['Emp Status','employment_status'],['Status Text','employment_status_text'],
+                ['Pers Area','personnel_area_code'],['Pers Area Text','personnel_area_text'],
+                ['Sub Area','personnel_sub_area_code'],['Sub Area Text','personnel_sub_area_text'],
+                ['Emp Grp','employee_group_code'],['Emp Grp Text','employee_group_text'],
+                ['Sub Grp','employee_sub_group_code'],['Sub Grp Text','employee_sub_group_text'],
+                ['Dept Code','department_code'],['Dept Text','department_text'],
+                ['Pay Level','pay_level'],['Cadre','cadre_code'],['Cadre Desc','cadre_description'],
+                ['Exec Cat','executive_category'],['Exec Cat Text','executive_category_text'],
+                ['Gaz Cat','gazetted_category'],['Gaz Cat Text','gazetted_category_text'],
+                ['Emp Type','employee_type_code'],['Emp Type Text','employee_type_text'],
+                ['Union','union_membership_code'],['Union Text','union_membership_text'],
+                ['Position','position_id'],['Position Text','position_text'],
+                ['Func Desig 1','functional_designation_1'],['Func Desig Text 1','functional_designation_text_1'],
+                ['Func Desig 2','functional_designation_2'],['Func Desig Text 2','functional_designation_text_2'],
+                ['Func Desig 3','functional_designation_3'],['Func Desig Text 3','functional_designation_text_3'],
+                ['Func Desig 4','functional_designation_4'],['Func Desig Text 4','functional_designation_text_4'],
+                ['Cost Ctr','cost_center_code'],['Work Sched','work_schedule_rule'],['Work Sched Text','work_schedule_rule_text'],
+                ['Joining','date_of_joining'],['Retirement','date_of_retirement'],['25 Yrs Service','years_of_service'],['DOB','date_of_birth'],
+                ['Gender','gender_code'],['Gender Desc','gender_description'],['Name (Hindi)','employee_name_in_hindi'],
+                ['Sys User ID','system_user_id'],['PAN','pan_number'],['Mobile','mobile_number'],['Email Addr','email_address'],['Extension','extension'],
+                ...Array.from({length:20}, (_,i)=>[`Rep Off ID ${i+1}`, `reporting_officer_id_${i+1}`]),
+                ...Array.from({length:20}, (_,i)=>[`Rep User ID ${i+1}`, `reporting_user_id_${i+1}`]),
+                ['CMD ID','cmd_id'],['OM Attr','om_attribute_code'],['OM Attr Desc','om_attribute_desc'],
+                ['Last Changed','last_changed_date'],['Last Changed By','last_changed_by'],['SAP Updated','sap_updated_at'],
+              ].map(([h, field])=>{
+                const active = field && (ordering === field || ordering === `-${field}`)
+                const arrow = !active ? '' : ordering.startsWith('-') ? ' ↓' : ' ↑'
+                return (
+                  <th key={h}
+                      onClick={field ? ()=>toggleSort(field) : undefined}
+                      style={{
+                        ...thStyle,
+                        cursor: field ? 'pointer' : 'default',
+                        userSelect: 'none',
+                        background: active ? '#DBEAFE' : thStyle.background,
+                      }}
+                      title={field ? 'Click to sort' : undefined}
+                  >
+                    {h}{arrow}
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={13} style={{padding:32,textAlign:'center',color:C.gray}}>Loading…</td></tr>}
+            {loading && <tr><td colSpan={113} style={{padding:32,textAlign:'center',color:C.gray}}>Loading…</td></tr>}
             {!loading && displayed.map(row => {
               const flagCell = (field) => (
                 <td style={{padding:'6px 10px',borderRight:`1px solid ${C.border}`,textAlign:'center'}}>
@@ -261,16 +501,48 @@ function UsersGrid({ toast }) {
                 <td style={{padding:'6px 10px',whiteSpace:'nowrap'}}>
                   <div style={{display:'flex',gap:5}}>
                     {dirty[row.id] && <GBtn label="Save" onClick={()=>saveRow(row)} color={C.green} />}
+                    <GBtn label="SAP" onClick={()=>setSapEditUser(row)} color={C.accent} />
                     <GBtn label={row.is_active?'Deactivate':'Activate'}
                           onClick={()=>toggleActive(row)}
                           color={row.is_active?C.red:C.green} />
                   </div>
                 </td>
+                {/* ─── SAP fields (read-only) ─── */}
+                {[
+                  'personnel_number','employee_title','employee_title_text','employee_full_name',
+                  'employment_status','employment_status_text',
+                  'personnel_area_code','personnel_area_text',
+                  'personnel_sub_area_code','personnel_sub_area_text',
+                  'employee_group_code','employee_group_text',
+                  'employee_sub_group_code','employee_sub_group_text',
+                  'department_code','department_text','pay_level','cadre_code','cadre_description',
+                  'executive_category','executive_category_text',
+                  'gazetted_category','gazetted_category_text',
+                  'employee_type_code','employee_type_text',
+                  'union_membership_code','union_membership_text',
+                  'position_id','position_text',
+                  'functional_designation_1','functional_designation_text_1',
+                  'functional_designation_2','functional_designation_text_2',
+                  'functional_designation_3','functional_designation_text_3',
+                  'functional_designation_4','functional_designation_text_4',
+                  'cost_center_code','work_schedule_rule','work_schedule_rule_text',
+                  'date_of_joining','date_of_retirement','years_of_service','date_of_birth',
+                  'gender_code','gender_description','employee_name_in_hindi',
+                  'system_user_id','pan_number','mobile_number','email_address','extension',
+                  ...Array.from({length:20},(_,i)=>`reporting_officer_id_${i+1}`),
+                  ...Array.from({length:20},(_,i)=>`reporting_user_id_${i+1}`),
+                  'cmd_id','om_attribute_code','om_attribute_desc',
+                  'last_changed_date','last_changed_by','sap_updated_at',
+                ].map(f => (
+                  <td key={f} style={{padding:'6px 10px',borderRight:`1px solid ${C.border}`,whiteSpace:'nowrap',color:'#666'}}>
+                    {row[f] ?? '—'}
+                  </td>
+                ))}
               </tr>
               )
             })}
             {!loading && displayed.length===0 && newRows.length===0 && (
-              <tr><td colSpan={13} style={{padding:32,textAlign:'center',color:C.gray}}>No users found</td></tr>
+              <tr><td colSpan={113} style={{padding:32,textAlign:'center',color:C.gray}}>No users found</td></tr>
             )}
             {/* New rows */}
             {newRows.map((nr, idx) => (
@@ -309,7 +581,14 @@ function UsersGrid({ toast }) {
           </tbody>
         </table>
       </div>
-      <div style={{marginTop:8,fontSize:12,color:C.gray}}>{displayed.length} user{displayed.length!==1?'s':''} · Click any cell to edit inline · Changes highlighted in yellow</div>
+      <div style={{marginTop:8,fontSize:12,color:C.gray}}>{displayed.length} user{displayed.length!==1?'s':''} · Click any cell to edit inline · Click <b>SAP</b> on a row to edit Employee Master fields</div>
+      {sapEditUser && (
+        <SapDetailsModal
+          user={sapEditUser}
+          onClose={() => setSapEditUser(null)}
+          onSave={saveSapDetails}
+        />
+      )}
     </div>
   )
 }

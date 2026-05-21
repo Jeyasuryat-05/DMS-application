@@ -114,7 +114,9 @@ export default function Dashboard() {
         {/* Quick actions */}
         <div style={{ display: 'flex', gap: 8 }}>
           {[
-            { icon: '⬆️', label: 'Create Document',   action: () => nav('/documents?upload=1') },
+            ...(user?.can_create || user?.role === 'System Admin'
+              ? [{ icon: '⬆️', label: 'Create Document', action: () => nav('/documents?upload=1') }]
+              : []),
             { icon: '🔄', label: 'My Workflow Tasks', action: () => nav('/workflow') },
             { icon: '📊', label: 'Generate Report',   action: () => nav('/reports') },
             { icon: '🔍', label: 'Search Documents',  action: () => nav('/documents') },

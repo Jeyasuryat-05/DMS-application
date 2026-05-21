@@ -32,8 +32,48 @@ def _iso(dt):
     return dt.isoformat() + 'Z' if dt else None
 
 
+SAP_FIELDS = [
+    'personnel_number', 'employee_title', 'employee_title_text', 'employee_full_name',
+    'employment_status', 'employment_status_text',
+    'personnel_area_code', 'personnel_area_text',
+    'personnel_sub_area_code', 'personnel_sub_area_text',
+    'employee_group_code', 'employee_group_text',
+    'employee_sub_group_code', 'employee_sub_group_text',
+    'department_code', 'department_text',
+    'pay_level', 'cadre_code', 'cadre_description',
+    'executive_category', 'executive_category_text',
+    'gazetted_category', 'gazetted_category_text',
+    'employee_type_code', 'employee_type_text',
+    'union_membership_code', 'union_membership_text',
+    'position_id', 'position_text',
+    'functional_designation_1', 'functional_designation_text_1',
+    'functional_designation_2', 'functional_designation_text_2',
+    'functional_designation_3', 'functional_designation_text_3',
+    'functional_designation_4', 'functional_designation_text_4',
+    'cost_center_code', 'work_schedule_rule', 'work_schedule_rule_text',
+    'date_of_joining', 'date_of_retirement', 'years_of_service', 'date_of_birth',
+    'gender_code', 'gender_description', 'employee_name_in_hindi',
+    'system_user_id', 'pan_number', 'mobile_number', 'email_address', 'extension',
+] + [f'reporting_officer_id_{i}' for i in range(1, 21)] \
+  + [f'reporting_user_id_{i}'    for i in range(1, 21)] \
+  + ['cmd_id', 'om_attribute_code', 'om_attribute_desc',
+     'last_changed_date', 'last_changed_by', 'sap_updated_at']
+
+
+def _serialize_sap(user):
+    out = {}
+    for f in SAP_FIELDS:
+        v = getattr(user, f, None)
+        if hasattr(v, 'isoformat'):
+            v = v.isoformat()
+        elif v is not None and f == 'sap_updated_at':
+            v = str(v)
+        out[f] = v
+    return out
+
+
 def _user_to_dict(user):
-    return {
+    base = {
         'id': user.id,
         'sap_username': user.sap_username,
         'employee_id': user.employee_id,
@@ -53,6 +93,8 @@ def _user_to_dict(user):
         'created_at': _iso(user.created_at),
         'profile_picture': user.profile_picture,
     }
+    base.update(_serialize_sap(user))
+    return base
 
 
 def _dt_to_dict(dt):
@@ -122,7 +164,9 @@ def users(request):
             qs = qs.filter(
                 Q(name__icontains=q) | Q(email__icontains=q) |
                 Q(sap_username__icontains=q) | Q(employee_id__icontains=q) |
-                Q(department__icontains=q) | Q(role__icontains=q)
+                Q(department__icontains=q) | Q(role__icontains=q) |
+                Q(personnel_number__icontains=q) | Q(employee_full_name__icontains=q) |
+                Q(position_text__icontains=q) | Q(department_text__icontains=q)
             )
         if department:
             qs = qs.filter(department=department)
@@ -130,6 +174,17 @@ def users(request):
             qs = qs.filter(role=role)
         if is_active is not None:
             qs = qs.filter(is_active=(is_active.lower() == 'true'))
+
+        ordering = request.query_params.get('ordering')
+        if ordering:
+            field = ordering.lstrip('-')
+            sortable = {
+                'employee_id', 'sap_username', 'name', 'email', 'department', 'role',
+                'is_active', 'created_at', 'last_login',
+            } | set(SAP_FIELDS)
+            if field in sortable:
+                qs = qs.order_by(ordering)
+
         return Response([_user_to_dict(u) for u in qs[skip:skip + limit]])
 
     # POST
@@ -153,6 +208,9 @@ def users(request):
         auth_codes=data.get('auth_codes', ''),
         hashed_password=hash_password(data['password']) if data.get('password') else None,
     )
+    for f in SAP_FIELDS:
+        if f in data:
+            setattr(user, f, data[f] or None)
     user.save()
     return Response(_user_to_dict(user), status=201)
 
@@ -178,7 +236,7 @@ def user_detail(request, user_id):
             'employee_id', 'auth_codes',
             'dms_enabled', 'can_create', 'can_edit', 'can_delete', 'can_read',
             'is_active', 'profile_picture',
-        }
+        } | set(SAP_FIELDS)
         for k, v in data.items():
             if k == 'password' and v:
                 user.hashed_password = hash_password(v)

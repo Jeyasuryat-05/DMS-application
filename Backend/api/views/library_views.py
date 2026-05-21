@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django.db.models import Q
 
 from api.models import DocumentType, Document, UserFolder, UserFolderDocType
+from api.authentication import _flag_check, require_read
 
 
 def _is_admin(user):
@@ -81,6 +82,7 @@ def _build_tree_for(user):
 
 
 @api_view(['GET'])
+@require_read
 def folder_tree(request):
     return Response(_build_tree_for(request.user))
 
@@ -89,6 +91,8 @@ def folder_tree(request):
 @parser_classes([JSONParser])
 def folders(request):
     if request.method == 'GET':
+        ok, resp = _flag_check(request.user, 'can_read', 'Read')
+        if not ok: return resp
         qs = _user_folders_visible_to(request.user)
         parent_id = request.query_params.get('parent_id')
         if parent_id == 'root':
@@ -98,6 +102,8 @@ def folders(request):
         return Response([_folder_to_dict(f) for f in qs.order_by('name')])
 
     # POST — create folder
+    ok, resp = _flag_check(request.user, 'can_create', 'Create')
+    if not ok: return resp
     data = request.data
     name = (data.get('name') or '').strip()
     if not name:
@@ -132,6 +138,16 @@ def folders(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @parser_classes([JSONParser])
 def folder_detail(request, folder_id):
+    if request.method == 'GET':
+        ok, resp = _flag_check(request.user, 'can_read', 'Read')
+        if not ok: return resp
+    elif request.method == 'PUT':
+        ok, resp = _flag_check(request.user, 'can_edit', 'Edit')
+        if not ok: return resp
+    elif request.method == 'DELETE':
+        ok, resp = _flag_check(request.user, 'can_delete', 'Delete')
+        if not ok: return resp
+
     try:
         folder = UserFolder.objects.get(id=folder_id, is_active=True)
     except UserFolder.DoesNotExist:
@@ -203,6 +219,7 @@ def folder_detail(request, folder_id):
 
 
 @api_view(['GET'])
+@require_read
 def folder_documents(request, folder_id):
     """Folders are containers — they don't hold documents directly. Pinned doc types do."""
     try:
@@ -227,6 +244,7 @@ def folder_documents(request, folder_id):
 
 
 @api_view(['GET'])
+@require_read
 def doc_type_documents(request, doc_type_id):
     """List documents for a single doc-type leaf (used when a doc-type card is opened)."""
     try:

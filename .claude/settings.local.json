@@ -5,7 +5,9 @@
       "Bash(powershell -Command \"Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force\")",
       "PowerShell(Stop-Process -Force)",
       "Bash(python3 -c ' *)",
-      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\j.thangamariappan\\\\OneDrive - Accenture\\\\Downloads\\\\files\\\\Backend\\\\\" | Where-Object { $_.Extension -match '\\\\.\\(db|sqlite|sqlite3\\)$' })"
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\j.thangamariappan\\\\OneDrive - Accenture\\\\Downloads\\\\files\\\\Backend\\\\\" | Where-Object { $_.Extension -match '\\\\.\\(db|sqlite|sqlite3\\)$' })",
+      "PowerShell(& \"Backend\\\\venv\\\\Scripts\\\\python.exe\" -m pip install --upgrade pip --quiet 2>&1)",
+      "PowerShell(& \"Backend\\\\venv\\\\Scripts\\\\python.exe\" -m pip install -r Backend\\\\requirements.txt 2>&1)"
     ]
   }
 }
