@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { libraryAPI, adminAPI } from '../api'
 import UploadModal from '../components/UploadModal'
 import { fmtDate } from '../utils/dates'
+import { Title, Text, Button, FlexBox } from '@ui5/webcomponents-react'
 
-/* ─── Palette ─────────────────────────────────────────────── */
-const BLUE   = '#0C447C'
-const BG     = '#f0f4f8'
-const WHITE  = '#fff'
-const BORDER = '#e2e8f0'
+/* ─── Palette — uses SAP tokens where possible ─────────────── */
+const BLUE   = 'var(--sapBrandColor)'
+const BG     = 'var(--sapBackgroundColor)'
+const WHITE  = 'var(--sapList_Background)'
+const BORDER = 'var(--sapList_BorderColor)'
 
 /* ─── Tiny helpers ────────────────────────────────────────── */
 function Badge({ label, color = '#64748b' }) {

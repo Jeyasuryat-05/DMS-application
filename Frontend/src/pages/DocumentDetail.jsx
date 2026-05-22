@@ -377,6 +377,7 @@ export default function DocumentDetail() {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [coverPageLoading, setCoverPageLoading] = useState(false)
 
   const [fileAccessStats, setFileAccessStats] = useState(null)
   const [showWfHistory, setShowWfHistory] = useState(false)
@@ -623,6 +624,23 @@ export default function DocumentDetail() {
     }
   }
 
+  async function handleDownloadCoverPage() {
+    setCoverPageLoading(true)
+    try {
+      const res = await documentsAPI.downloadCoverPage(id)
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${doc.doc_number || 'cover_page'}_cover_page.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      alert('Failed to generate cover page.')
+    } finally {
+      setCoverPageLoading(false)
+    }
+  }
+
   async function handleShare(version) {
     const res = await documentsAPI.getShareLink(id, version)
     setShareLink({ ...res.data, link: normalizeShareLink(res.data.link) })
@@ -836,25 +854,37 @@ export default function DocumentDetail() {
   const isCheckedOutByMe = doc.checked_out && doc.checked_out_by?.id === user?.id
   const isCheckedOutByOther = doc.checked_out && !isCheckedOutByMe
 
-  // Can edit metadata in Draft or Created (preparation stage), not during formal review, not locked by someone else
-  const isOwner   = doc.creator?.id === user?.id
-  const isAdminUser = ['System Admin', 'Sub Admin'].includes(user?.role)
-  const isEditor  = (doc.editors || []).some(u => u.id === user?.id)
-  const hasEditAccess = isOwner || isEditor || isAdminUser
-  const canEdit    = hasEditAccess && !LOCKED_STATUSES.includes(doc.status) && !isCheckedOutByOther
+  // ── User permission flags from backend ──────────────────────────────────────
+  const isAdminUser  = ['System Admin', 'Sub Admin'].includes(user?.role)
+  const userCanEdit  = !!(user?.can_edit   || isAdminUser)
+  const userCanCreate= !!(user?.can_create || isAdminUser)
+  const userCanDelete= !!(user?.can_delete || isAdminUser)
 
-  // Can upload files only in Draft, no active workflow, not locked by someone else
-  const canUploadFile = doc.status === 'Draft' && !wfActive && !isCheckedOutByOther
+  // ── Document-level access ────────────────────────────────────────────────────
+  const isOwner  = doc.creator?.id === user?.id
+  const isEditor = (doc.editors || []).some(u => u.id === user?.id)
 
-  // Can create new version ONLY if currently Released
-  const canNewVersion = doc.status === 'Released' && !wfActive
+  // hasEditAccess: structural access (owner/editor/admin) AND user must have can_edit permission
+  const hasEditAccess = (isOwner || isEditor || isAdminUser) && userCanEdit
 
-  // Can delete document only in Draft, no active workflow
-  const canDelete  = doc.status === 'Draft' && !wfActive
+  // canEdit: structural access + edit permission + not in a locked status + not checked out by someone else
+  const canEdit = hasEditAccess && !LOCKED_STATUSES.includes(doc.status) && !isCheckedOutByOther
 
-  // Flag for deletion: allowed in Prepare (or no workflow); blocked during Check/Review/Approve
-  // and once Released (a released doc is part of the official record).
-  const canFlagDelete = !wfActive && doc.status !== 'Released'
+  // canUploadFile: edit permission required (uploading files modifies the document)
+  const canUploadFile = userCanEdit && (isOwner || isEditor || isAdminUser) &&
+    doc.status === 'Draft' && !wfActive && !isCheckedOutByOther
+
+  // canNewVersion: edit permission required to create a new version
+  const canNewVersion = userCanEdit && (isOwner || isEditor || isAdminUser) &&
+    doc.status === 'Released' && !wfActive
+
+  // canDelete: delete permission required
+  const canDelete = userCanDelete && (isOwner || isAdminUser) &&
+    doc.status === 'Draft' && !wfActive
+
+  // canFlagDelete: edit permission required; blocked during active workflow and once Released
+  const canFlagDelete = userCanEdit && (isOwner || isEditor || isAdminUser) &&
+    !wfActive && doc.status !== 'Released'
 
   // Find the current user's pending task at the active step
   const myPendingTask = wf && !wf.completed
@@ -865,7 +895,9 @@ export default function DocumentDetail() {
       )
     : null
 
-  // Can approve/reject only if user has a pending task
+  // canWfAction: user must have a pending task assigned to them
+  // Workflow approval is an action that requires at minimum read access (no edit flag needed —
+  // the task was explicitly assigned to this user by an admin/initiator)
   const canWfAction = !!myPendingTask
 
   const TABS = [
@@ -881,79 +913,52 @@ export default function DocumentDetail() {
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1100 }}>
       {/* Back + header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <Btn label="← Back" onClick={() => {
-            // Step exactly one entry back so we land where the user came from
-            // (e.g. a doc-type drilldown inside the library). Falls back to a
-            // sensible default for direct/deep-linked visits.
-            if (window.history.length > 1) nav(-1)
-            else nav(backTo)
-          }} title="Go back one step." />
-        <span style={{ fontSize: 12, color: '#9ca3af' }}>{doc.doc_number}</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button onClick={() => { if (window.history.length > 1) nav(-1); else nav(backTo) }}
+          title="Go back one step."
+          style={{ background: 'none', border: '1px solid #D9D9D9', borderRadius: 4, padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: '#0070F2', fontFamily: 'inherit' }}>
+          ← Back
+        </button>
+        <span style={{ fontSize: 12, color: '#6A6D70' }}>{doc.doc_number}</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
           {doc.confidential && <Badge label="Confidential" />}
           {doc.checked_out && <Badge label="Checked Out" />}
           <Badge label={viewingHistorical ? (viewingVersionStatus || 'Superseded') : doc.status} />
           {canWfAction && myPendingTask && (
             <>
-              <button
-                onClick={() => setWfAction('advance')}
+              <button onClick={() => setWfAction('advance')}
                 disabled={myPendingTask.level?.checklist_required === true && !!myPendingTask.level?.checklist_template_name && !myPendingTask.checklist_done}
                 title="Approve this document at your assigned level"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
-                  border: 'none', background: '#0F6E56', color: '#fff',
-                  fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-                  opacity: (myPendingTask.level?.checklist_required === true && !!myPendingTask.level?.checklist_template_name && !myPendingTask.checklist_done) ? 0.6 : 1,
-                }}>
+                style={{ padding: '5px 12px', borderRadius: 4, border: 'none', background: '#188918', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
                 ✅ Approve
               </button>
-              <button
-                onClick={() => setWfAction('reject')}
+              <button onClick={() => setWfAction('reject')}
                 title="Reject this document"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
-                  border: 'none', background: '#A32D2D', color: '#fff',
-                  fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-                }}>
+                style={{ padding: '5px 12px', borderRadius: 4, border: 'none', background: '#BB0000', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
                 ❌ Reject
               </button>
-              <button
-                onClick={() => setWfAction('return')}
+              <button onClick={() => setWfAction('return')}
                 title="Return for correction"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
-                  border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
-                  fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-                }}>
+                style={{ padding: '5px 12px', borderRadius: 4, border: '1px solid #D9D9D9', background: '#fff', color: '#32363A', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
                 ↩ Return
               </button>
             </>
           )}
           {doc.workflow_history?.length > 0 && (
-            <button
-              onClick={() => setShowWfHistory(true)}
-              title="View previous workflow cycles — approvals, rejections, digital signatures and checklists"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5,
-                padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
-                border: '1px solid #185FA5', background: '#E6F1FB',
-                color: '#0C447C', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-              }}>
+            <button onClick={() => setShowWfHistory(true)}
+              title="View previous workflow cycles"
+              style={{ padding: '5px 12px', borderRadius: 4, border: '1px solid #D9D9D9', background: '#fff', color: '#6A6D70', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
               📋 Workflow History ({doc.workflow_history.length})
             </button>
           )}
         </div>
       </div>
 
-      <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700 }}>{doc.title}</h1>
-      <p style={{ margin: '0 0 8px', color: '#6b7280', fontSize: 13 }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color: '#32363A', margin: '0 0 4px' }}>{doc.title}</div>
+      <div style={{ display: 'block', margin: '0 0 8px', color: '#6A6D70', fontSize: 13 }}>
         {doc.doc_type?.name} · {doc.project || '—'} · USI: {doc.usi_kks_code || '—'} · v{viewingVersionNumber}
         {doc.serial_no && ` · ${doc.serial_no}`}
-      </p>
+      </div>
 
       {/* Owner / created info */}
       {doc.creator && (
@@ -988,6 +993,17 @@ export default function DocumentDetail() {
               }}
             >🔑 Request Edit Access</button>
           )}
+        </div>
+      )}
+
+      {doc.on_behalf_of && (
+        <div style={{
+          display:'flex', alignItems:'center', gap:8, marginBottom:12,
+          padding:'7px 12px', background:'#EDE7F6', border:'1px solid #7F77DD',
+          borderRadius:7, fontSize:12, color:'#4A148C', width:'fit-content',
+        }}>
+          <span>👤</span>
+          <span>Created on behalf of <strong>{doc.on_behalf_of.name}</strong> ({doc.on_behalf_of.email})</span>
         </div>
       )}
 
@@ -1110,7 +1126,7 @@ export default function DocumentDetail() {
           </button>
         )}
 
-        {doc.status === 'Draft' && (
+        {doc.status === 'Draft' && userCanEdit && (isOwner || isEditor || isAdminUser) && (
           <Btn label="Initiate Workflow" onClick={handleSubmitWorkflow} variant="primary" icon="⚙"
             title="Configure the approval workflow — assign checkers, reviewers, and approvers — then start the formal review process for this document." />
         )}
@@ -1140,6 +1156,21 @@ export default function DocumentDetail() {
           title="Generate a shareable link that always points to the latest version of this document. Anyone with the link can view it." />
         <Btn label="Share v" onClick={() => handleShare(doc.current_version)} icon="📌"
           title={`Generate a shareable link pinned specifically to the current version (v${doc.current_version}). The link will not update if a newer version is released.`} />
+
+        <button
+          onClick={handleDownloadCoverPage}
+          disabled={coverPageLoading}
+          title="Download the auto-generated cover page PDF for this document"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '7px 16px', borderRadius: 8,
+            background: coverPageLoading ? '#e5e7eb' : '#185FA5', color: '#fff',
+            border: 'none', cursor: coverPageLoading ? 'not-allowed' : 'pointer',
+            fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+            opacity: coverPageLoading ? 0.7 : 1,
+          }}>
+          {coverPageLoading ? '⏳ Generating…' : '📄 Cover Page'}
+        </button>
 
         {/* Archive — only when Released, no active workflow, no historical view */}
         {doc.status === 'Released' && !wfActive && !viewingHistorical && (

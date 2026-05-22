@@ -92,6 +92,7 @@ export const documentsAPI = {
   requestEditAccess:(id, message)         => api.post(`/documents/${id}/request-edit-access`, { message }),
   incomingAccessRequests: ()              => api.get('/access-requests/incoming'),
   decideAccessRequest:    (id, action)    => api.post(`/access-requests/${id}/decide`, { action }),
+  downloadCoverPage:      (id)            => api.get(`/documents/${id}/cover-page`, { responseType: 'blob' }),
 }
 
 // ─── Workflow ─────────────────────────────────────────────────────────────────
@@ -153,8 +154,12 @@ export const adminAPI = {
   reserveNumbers:     (data)  => api.post('/admin/number-reservations', data),
   getConfig:          ()      => api.get('/admin/config'),
   saveConfig:         (data)  => api.put('/admin/config', data),
-  getCoverPageTemplate: ()           => api.get('/admin/cover-page-template'),
+  getCoverPageTemplate:  ()           => api.get('/admin/cover-page-template'),
   saveCoverPageTemplate: (data)      => api.put('/admin/cover-page-template', data),
+  listApproverConfigs:   ()          => api.get('/admin/approver-configs'),
+  createApproverConfig:  (data)      => api.post('/admin/approver-configs', data),
+  updateApproverConfig:  (id, data)  => api.put(`/admin/approver-configs/${id}`, data),
+  deleteApproverConfig:  (id)        => api.delete(`/admin/approver-configs/${id}`),
   seed:               ()      => api.post('/admin/seed'),
   flaggedDocuments:       ()              => api.get('/admin/flagged-documents'),
   runDeletionJob:         ()              => api.post('/admin/run-deletion-job'),
@@ -163,6 +168,12 @@ export const adminAPI = {
   creationLogs:           (params)        => api.get('/admin/logs/creations', { params }),
   deletionLogsDownload:   (params = {})   => `/api/admin/logs/deletions/download?${new URLSearchParams(params)}`,
   creationLogsDownload:   (params = {})   => `/api/admin/logs/creations/download?${new URLSearchParams(params)}`,
+}
+
+// ─── Workflow Approver Lookup ─────────────────────────────────────────────────
+export const approverAPI = {
+  lookup: (employee_number, process_id) =>
+    api.get('/workflow/approver-lookup', { params: { employee_number, process_id } }),
 }
 
 // ─── Document Library ─────────────────────────────────────────────────────────

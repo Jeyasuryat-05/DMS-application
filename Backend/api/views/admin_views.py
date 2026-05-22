@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from api.models import (
     User, DocumentType, DocTypeFileFormat, WorkflowConfig, AlertConfig,
     NumberReservation, SystemConfig, Document, AuditLog, WorkflowLevel, CoverPageTemplate,
+    ApproverConfig,
 )
 from api.authentication import hash_password, cfg, set_cfg
 
@@ -794,3 +795,124 @@ def cover_page_template(request):
             logger.error(f"Error saving cover page template: {str(e)}")
             return Response({'detail': str(e)}, status=400)
 
+
+# ─── Workflow Approver Config (Mock API) ──────────────────────────────────────
+
+def _approver_to_dict(a):
+    return {
+        'id':                       a.id,
+        'employee_number':          a.employee_number,
+        'process_id':               a.process_id,
+        'approver_employee_number': a.approver_employee_number,
+        'approver_employee_name':   a.approver_employee_name,
+        'approver_email':           a.approver_email,
+        'approver_level':           a.approver_level,
+        'final_approver_flag':      a.final_approver_flag,
+    }
+
+
+@api_view(['GET', 'POST'])
+def approver_configs(request):
+    """List all approver config rows (admin) or create a new one."""
+    err = _require_admin(request)
+    if err:
+        return err
+    if request.method == 'GET':
+        qs = ApproverConfig.objects.all()
+        return Response([_approver_to_dict(a) for a in qs])
+    data = request.data
+    required = ['employee_number', 'process_id', 'approver_employee_number',
+                'approver_employee_name', 'approver_level']
+    for f in required:
+        if not data.get(f):
+            return Response({'detail': f'{f} is required'}, status=400)
+    flag = str(data.get('final_approver_flag', 'N')).upper()
+    if flag not in ('Y', 'N'):
+        flag = 'N'
+    a = ApproverConfig.objects.create(
+        employee_number          = str(data['employee_number']).strip(),
+        process_id               = str(data['process_id']).strip(),
+        approver_employee_number = str(data['approver_employee_number']).strip(),
+        approver_employee_name   = str(data['approver_employee_name']).strip(),
+        approver_email           = str(data.get('approver_email', '')).strip(),
+        approver_level           = int(data['approver_level']),
+        final_approver_flag      = flag,
+    )
+    return Response(_approver_to_dict(a), status=201)
+
+
+@api_view(['PUT', 'DELETE'])
+def approver_config_detail(request, config_id):
+    """Update or delete a single approver config row."""
+    err = _require_admin(request)
+    if err:
+        return err
+    try:
+        a = ApproverConfig.objects.get(id=config_id)
+    except ApproverConfig.DoesNotExist:
+        return Response({'detail': 'Not found'}, status=404)
+    if request.method == 'DELETE':
+        a.delete()
+        return Response(status=204)
+    data = request.data
+    for field in ['employee_number', 'process_id', 'approver_employee_number',
+                  'approver_employee_name', 'approver_email', 'approver_level']:
+        if field in data:
+            setattr(a, field, data[field])
+    if 'final_approver_flag' in data:
+        flag = str(data['final_approver_flag']).upper()
+        a.final_approver_flag = flag if flag in ('Y', 'N') else 'N'
+    a.save()
+    return Response(_approver_to_dict(a))
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([])
+def approver_lookup(request):
+    """
+    Workflow Approver Lookup API — mirrors the Excel spec.
+    Input  (query params): employee_number, process_id
+    Output: list of approver rows ordered by level.
+    Also resolves approver_email from the User table if blank in config.
+    """
+    from rest_framework.permissions import AllowAny
+    emp_num    = (request.GET.get('employee_number') or '').strip()
+    process_id = (request.GET.get('process_id') or '').strip()
+    if not emp_num or not process_id:
+        return Response({'detail': 'employee_number and process_id are required'}, status=400)
+
+    # Resolve the requesting employee's name from User table if available
+    try:
+        emp_user = User.objects.get(personnel_number=emp_num)
+        emp_name = emp_user.name
+    except User.DoesNotExist:
+        emp_name = emp_num
+
+    rows = ApproverConfig.objects.filter(
+        employee_number=emp_num, process_id=process_id
+    ).order_by('approver_level')
+
+    if not rows.exists():
+        return Response([], status=200)
+
+    result = []
+    for a in rows:
+        # Try to enrich approver email from User table
+        email = a.approver_email
+        if not email:
+            try:
+                u = User.objects.get(personnel_number=a.approver_employee_number)
+                email = u.email or ''
+            except User.DoesNotExist:
+                pass
+        result.append({
+            'employee_number':          emp_num,
+            'employee_name':            emp_name,
+            'approver_employee_number': a.approver_employee_number,
+            'approver_employee_name':   a.approver_employee_name,
+            'approver_email':           email,
+            'approver_level':           a.approver_level,
+            'final_approver_flag':      a.final_approver_flag,
+        })
+    return Response(result)

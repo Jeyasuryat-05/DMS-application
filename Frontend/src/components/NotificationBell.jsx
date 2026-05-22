@@ -54,12 +54,12 @@ export default function NotificationBell() {
         title="Notifications"
         style={{
           background: 'none', border: 'none', position: 'relative',
-          cursor: 'pointer', fontSize: 20, color: '#6b7280',
+          cursor: 'pointer', fontSize: 18, color: 'rgba(255,255,255,0.8)',
           transition: 'color 0.15s',
           padding: '4px 8px',
         }}
-        onMouseEnter={e => e.currentTarget.style.color = '#185FA5'}
-        onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}
+        onMouseEnter={e => e.currentTarget.style.color = '#fff'}
+        onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.8)'}
       >
         🔔
         {totalNotifications > 0 && (

@@ -1,8 +1,9 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useState, useEffect, useRef } from 'react'
 import { workflowAPI, authAPI } from '../api'
 import NotificationBell from './NotificationBell'
+import { BusyIndicator } from '@ui5/webcomponents-react'
 
 const ADMIN_ROLES = ['System Admin', 'Sub Admin', 'Sub-Admin']
 
@@ -15,78 +16,68 @@ const NAV = [
   { to: '/admin',     icon: '⚙️', label: 'Administration', roles: ADMIN_ROLES },
 ]
 
-function Avatar({ src, name, size = 36 }) {
-  const initials = (name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-  return src ? (
-    <img src={src} alt={name} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', display: 'block' }} />
-  ) : (
-    <div style={{
-      width: size, height: size, borderRadius: '50%',
-      background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-      color: '#fff', fontWeight: 700, fontSize: size * 0.36,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-    }}>{initials}</div>
-  )
+const C = {
+  brand:    '#0070F2',
+  white:    '#FFFFFF',
+  border:   '#D9D9D9',
+  bg:       '#F5F6F7',
+  text:     '#32363A',
+  label:    '#6A6D70',
+  hover:    '#EBF5FE',
+  negative: '#BB0000',
+  topbar:   '#FFFFFF',
 }
 
+// ── Profile Modal (native overlay) ──────────────────────────────────────────
 function ProfileModal({ user, onClose, onPictureUpdated }) {
   const fileRef = useRef()
-  const [uploading, setUploading] = useState(false)
-  const [removing, setRemoving] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [uploading, setUploading]   = useState(false)
+  const [removing,  setRemoving]    = useState(false)
+  const [error,     setError]       = useState('')
+  const [success,   setSuccess]     = useState('')
   const [previewUrl, setPreviewUrl] = useState(user?.profile_picture || null)
   const [pendingFile, setPendingFile] = useState(null)
   const hasSavedPic = !!(user?.profile_picture)
 
+  // close on Escape
+  useEffect(() => {
+    const fn = e => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', fn)
+    return () => document.removeEventListener('keydown', fn)
+  }, [onClose])
+
   function handleFileChange(e) {
     const file = e.target.files?.[0]
     if (!file) return
-    const allowed = ['image/jpeg', 'image/png']
-    if (!allowed.includes(file.type)) {
-      setError('Only JPG and PNG files are allowed')
-      e.target.value = ''
-      return
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File must be smaller than 5 MB')
-      e.target.value = ''
-      return
-    }
-    setError('')
-    setSuccess('')
+    if (!['image/jpeg','image/png'].includes(file.type)) { setError('Only JPG and PNG files are allowed'); e.target.value = ''; return }
+    if (file.size > 5 * 1024 * 1024) { setError('File must be smaller than 5 MB'); e.target.value = ''; return }
+    setError(''); setSuccess('')
     setPreviewUrl(URL.createObjectURL(file))
     setPendingFile(file)
   }
 
   function handleCancel() {
     setPreviewUrl(user?.profile_picture || null)
-    setPendingFile(null)
-    setError('')
+    setPendingFile(null); setError('')
     if (fileRef.current) fileRef.current.value = ''
   }
 
   async function handleRemove() {
     if (!window.confirm('Remove your profile picture?')) return
-    setRemoving(true)
-    setError('')
+    setRemoving(true); setError('')
     try {
       await authAPI.removeProfilePicture()
-      setPreviewUrl(null)
-      setSuccess('Profile picture removed.')
+      setPreviewUrl(null); setSuccess('Profile picture removed.')
       setTimeout(() => onPictureUpdated(null), 900)
     } catch (err) {
-      const detail = err?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : err?.message || 'Remove failed')
-    } finally {
-      setRemoving(false)
-    }
+      const d = err?.response?.data?.detail
+      setError(typeof d === 'string' ? d : err?.message || 'Remove failed')
+    } finally { setRemoving(false) }
   }
 
   async function handleSave() {
     if (!pendingFile) return
-    setUploading(true)
-    setError('')
+    setUploading(true); setError('')
     try {
       const fd = new FormData()
       fd.append('file', pendingFile)
@@ -95,17 +86,13 @@ function ProfileModal({ user, onClose, onPictureUpdated }) {
       setPendingFile(null)
       setTimeout(() => onPictureUpdated(res.data.url), 900)
     } catch (err) {
-      const detail = err?.response?.data?.detail
-      const msg = typeof detail === 'string' ? detail
-                : Array.isArray(detail) ? detail.map(d => d.msg).join(', ')
-                : err?.message || 'Upload failed'
-      setError(msg)
-      setPreviewUrl(user?.profile_picture || null)
-      setPendingFile(null)
-    } finally {
-      setUploading(false)
-    }
+      const d = err?.response?.data?.detail
+      setError(typeof d === 'string' ? d : Array.isArray(d) ? d.map(x => x.msg).join(', ') : err?.message || 'Upload failed')
+      setPreviewUrl(user?.profile_picture || null); setPendingFile(null)
+    } finally { setUploading(false) }
   }
+
+  const initials = (user?.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
 
   const fields = [
     { label: 'Full Name',    value: user?.name },
@@ -114,113 +101,152 @@ function ProfileModal({ user, onClose, onPictureUpdated }) {
     { label: 'Department',   value: user?.department },
     { label: 'Employee ID',  value: user?.employee_id },
     { label: 'SAP Username', value: user?.sap_username },
-  ]
+  ].filter(f => f.value)
 
   return (
-    <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-    }}>
-      <div onClick={e => e.stopPropagation()} style={{
-        background: '#fff', borderRadius: 16, width: 420, maxWidth: '92vw',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.2)', overflow: 'hidden',
-      }}>
-        {/* Header band */}
-        <div style={{ background: 'linear-gradient(135deg, #0C447C, #185FA5)', padding: '28px 24px 40px', position: 'relative' }}>
+    // overlay
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(0,0,0,0.45)',
+        zIndex: 9999,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      {/* modal box — stop propagation so clicking inside doesn't close */}
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: C.white,
+          borderRadius: 8,
+          width: 420, maxWidth: '95vw',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          boxShadow: '0 8px 40px rgba(0,0,0,0.22)',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        {/* header */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '14px 20px',
+          borderBottom: `1px solid ${C.border}`,
+          position: 'sticky', top: 0, background: C.white, zIndex: 1,
+        }}>
+          <span style={{ fontWeight: 700, fontSize: 15, color: C.text }}>My Profile</span>
           <button onClick={onClose} style={{
-            position: 'absolute', top: 14, right: 14, background: 'rgba(255,255,255,0.15)',
-            border: 'none', color: '#fff', borderRadius: '50%', width: 30, height: 30,
-            fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>×</button>
-          <div style={{ color: '#fff', fontWeight: 700, fontSize: 17, marginBottom: 4 }}>My Profile</div>
-          <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 12 }}>View your account details</div>
+            background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: 20, color: C.label, lineHeight: 1, padding: '2px 6px',
+            borderRadius: 4,
+          }}
+          onMouseOver={e => e.currentTarget.style.color = C.negative}
+          onMouseOut={e => e.currentTarget.style.color = C.label}
+          >✕</button>
         </div>
 
-        {/* Avatar — overlapping header */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: -40, marginBottom: 12, position: 'relative', zIndex: 1 }}>
-          <div style={{ position: 'relative' }}>
-            <div style={{ borderRadius: '50%', border: '4px solid #fff', overflow: 'hidden', boxShadow: '0 4px 16px rgba(0,0,0,0.15)' }}>
-              <Avatar src={previewUrl} name={user?.name} size={80} />
+        {/* body */}
+        <div style={{ padding: '20px 20px 0' }}>
+          {/* avatar */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+            <div style={{ position: 'relative' }}>
+              {previewUrl
+                ? <img src={previewUrl} alt={user?.name} style={{ width: 80, height: 80, borderRadius: '50%', objectFit: 'cover', border: `3px solid ${C.brand}` }} />
+                : (
+                  <div style={{ width: 80, height: 80, borderRadius: '50%', background: C.brand, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 700, color: '#fff', border: `3px solid ${C.brand}` }}>
+                    {initials}
+                  </div>
+                )
+              }
+              <button onClick={() => fileRef.current?.click()} disabled={uploading || removing}
+                title="Change profile picture"
+                style={{ position: 'absolute', bottom: 0, right: 0, background: C.brand, border: '2px solid #fff', color: '#fff', borderRadius: '50%', width: 26, height: 26, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                📷
+              </button>
+              {hasSavedPic && !pendingFile && (
+                <button onClick={handleRemove} disabled={uploading || removing}
+                  title="Remove"
+                  style={{ position: 'absolute', bottom: 0, left: 0, background: C.negative, border: '2px solid #fff', color: '#fff', borderRadius: '50%', width: 26, height: 26, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  🗑
+                </button>
+              )}
+              <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png" style={{ display: 'none' }} onChange={handleFileChange} />
             </div>
-            {!pendingFile && (
-              <>
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  disabled={uploading || removing}
-                  title="Change profile picture"
-                  style={{
-                    position: 'absolute', bottom: 0, right: 0,
-                    background: '#0C447C', border: '2px solid #fff', color: '#fff',
-                    borderRadius: '50%', width: 26, height: 26, fontSize: 13,
-                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >📷</button>
-                {hasSavedPic && (
-                  <button
-                    onClick={handleRemove}
-                    disabled={uploading || removing}
-                    title="Remove profile picture"
-                    style={{
-                      position: 'absolute', bottom: 0, left: 0,
-                      background: '#dc2626', border: '2px solid #fff', color: '#fff',
-                      borderRadius: '50%', width: 26, height: 26, fontSize: 13,
-                      cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}
-                  >🗑</button>
-                )}
-              </>
-            )}
-            <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png" style={{ display: 'none' }} onChange={handleFileChange} />
+          </div>
+
+          <div style={{ textAlign: 'center', marginBottom: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: C.text }}>{user?.name}</div>
+            <div style={{ fontSize: 12, color: C.label, marginTop: 3 }}>{user?.role} · {user?.department}</div>
+            {uploading && <div style={{ marginTop: 8 }}><BusyIndicator active size="Small" /></div>}
+          </div>
+
+          {error   && <div style={{ background: '#fff0f0', border: '1px solid #ffbaba', color: C.negative, borderRadius: 4, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{error}</div>}
+          {success && <div style={{ background: '#f0fff4', border: '1px solid #b7ebc0', color: '#188918', borderRadius: 4, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{success}</div>}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            {fields.map(f => (
+              <div key={f.label} style={{ display: 'flex', alignItems: 'center', gap: 12, background: C.bg, borderRadius: 6, padding: '10px 14px', border: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 10, color: C.label, width: 100, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{f.label}</div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{f.value}</div>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Name + role */}
-        <div style={{ textAlign: 'center', marginBottom: 16, padding: '0 24px' }}>
-          <div style={{ fontWeight: 700, fontSize: 16, color: '#111827' }}>{user?.name}</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 3 }}>{user?.role} · {user?.department}</div>
-          {error && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{error}</div>}
-          {success && <div style={{ color: '#16a34a', fontSize: 12, marginTop: 8, fontWeight: 600 }}>{success}</div>}
-
-          {/* Save / Cancel buttons shown only when a new file is selected */}
+        {/* footer */}
+        <div style={{
+          display: 'flex', justifyContent: 'flex-end', gap: 8,
+          padding: '12px 20px',
+          borderTop: `1px solid ${C.border}`,
+          position: 'sticky', bottom: 0, background: C.white,
+        }}>
           {pendingFile && !uploading && (
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12 }}>
-              <button onClick={handleSave} style={{
-                background: '#0C447C', color: '#fff', border: 'none',
-                borderRadius: 8, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-              }}>Save Photo</button>
-              <button onClick={handleCancel} style={{
-                background: '#f3f4f6', color: '#374151', border: 'none',
-                borderRadius: 8, padding: '7px 14px', fontSize: 13, cursor: 'pointer',
-              }}>Cancel</button>
-            </div>
+            <>
+              <button onClick={handleSave} style={{ padding: '7px 16px', background: C.brand, color: '#fff', border: 'none', borderRadius: 4, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Save Photo</button>
+              <button onClick={handleCancel} style={{ padding: '7px 16px', background: C.white, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+            </>
           )}
-          {uploading && (
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 10 }}>Uploading…</div>
-          )}
-        </div>
-
-        {/* Details grid */}
-        <div style={{ padding: '0 24px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {fields.filter(f => f.value).map(f => (
-            <div key={f.label} style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              background: '#f9fafb', borderRadius: 8, padding: '10px 14px',
-            }}>
-              <div style={{ fontSize: 11, color: '#9ca3af', width: 100, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{f.label}</div>
-              <div style={{ fontSize: 13, color: '#111827', fontWeight: 500 }}>{f.value}</div>
-            </div>
-          ))}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 12,
-            background: '#f9fafb', borderRadius: 8, padding: '10px 14px',
-          }}>
-            <div style={{ fontSize: 11, color: '#9ca3af', width: 100, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Account</div>
-            <span style={{ fontSize: 11, background: user?.is_active ? '#dcfce7' : '#fee2e2', color: user?.is_active ? '#15803d' : '#dc2626', borderRadius: 99, padding: '2px 10px', fontWeight: 600 }}>
-              {user?.is_active ? 'Active' : 'Inactive'}
-            </span>
-          </div>
+          <button onClick={onClose} style={{ padding: '7px 16px', background: C.white, color: C.label, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, cursor: 'pointer' }}
+            onMouseOver={e => { e.currentTarget.style.background = C.bg }}
+            onMouseOut={e => { e.currentTarget.style.background = C.white }}
+          >Close</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Sidebar nav item ─────────────────────────────────────────────────────────
+function SideNavItem({ item, isActive, onClick, badge }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '10px 16px',
+        cursor: 'pointer',
+        fontSize: 13, fontWeight: isActive ? 600 : 400,
+        color: isActive ? C.brand : hovered ? C.brand : C.text,
+        background: isActive ? C.hover : hovered ? '#f4f5f6' : 'transparent',
+        borderLeft: isActive ? `3px solid ${C.brand}` : '3px solid transparent',
+        borderRadius: '0 6px 6px 0',
+        marginRight: 8,
+        transition: 'all 0.15s',
+        userSelect: 'none',
+      }}
+    >
+      <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
+      <span style={{ flex: 1 }}>{item.label}</span>
+      {badge > 0 && (
+        <span style={{
+          background: C.negative, color: '#fff',
+          borderRadius: 99, fontSize: 10, fontWeight: 700,
+          padding: '1px 6px', minWidth: 18, textAlign: 'center',
+        }}>{badge}</span>
+      )}
     </div>
   )
 }
@@ -228,6 +254,7 @@ function ProfileModal({ user, onClose, onPictureUpdated }) {
 export default function Layout() {
   const { user, logout, updateUser } = useAuth()
   const nav = useNavigate()
+  const location = useLocation()
   const [pendingCount, setPendingCount] = useState(0)
   const [profileOpen, setProfileOpen] = useState(false)
 
@@ -242,97 +269,142 @@ export default function Layout() {
 
   function handlePictureUpdated(url) {
     updateUser({ profile_picture: url || null })
+    setProfileOpen(false)
   }
 
+  const initials = (user?.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
   const profilePic = user?.profile_picture || null
+  const visibleNav = NAV.filter(item => !item.roles || item.roles.includes(user?.role))
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      {/* Sidebar */}
-      <aside style={{
-        width: 220, background: '#0C447C', color: '#fff',
-        display: 'flex', flexDirection: 'column', flexShrink: 0,
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: C.bg }}>
+
+      {/* ── Top Bar ── */}
+      <header style={{
+        height: 44,
+        background: '#1B3A6B',
+        display: 'flex', alignItems: 'center',
+        padding: '0 16px',
+        gap: 12,
+        flexShrink: 0,
+        boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+        zIndex: 100,
       }}>
-        {/* Logo */}
-        <div style={{ padding: '20px 16px 16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 36, height: 36, background: '#185FA5', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📁</div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>DMS Portal</div>
-              <div style={{ fontSize: 11, opacity: 0.6 }}>NPCIL</div>
-            </div>
-          </div>
+        {/* Logo / title */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1 }}>
+          <div style={{ width: 28, height: 28, background: C.brand, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 800, color: '#fff' }}>D</div>
+          <span style={{ fontWeight: 700, fontSize: 15, color: '#fff' }}>DMS Portal</span>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginLeft: 4 }}>NPCIL</span>
         </div>
 
-        {/* Nav links */}
-        <nav style={{ flex: 1, padding: '12px 0' }}>
-          {NAV.filter(item => !item.roles || item.roles.includes(user?.role)).map(item => (
-            <NavLink key={item.to} to={item.to} end={item.to === '/'} style={({ isActive }) => ({
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '10px 16px', textDecoration: 'none', fontSize: 13, fontWeight: 500,
-              color: isActive ? '#fff' : 'rgba(255,255,255,0.65)',
-              background: isActive ? 'rgba(255,255,255,0.12)' : 'transparent',
-              borderLeft: isActive ? '3px solid #60a5fa' : '3px solid transparent',
-              transition: 'all 0.15s',
-            })}>
-              <span style={{ fontSize: 16 }}>{item.icon}</span>
-              {item.label}
-              {item.to === '/workflow' && pendingCount > 0 && (
-                <span style={{ marginLeft: 'auto', background: '#E24B4A', color: '#fff', borderRadius: 99, fontSize: 10, padding: '1px 6px' }}>{pendingCount}</span>
-              )}
-            </NavLink>
-          ))}
-        </nav>
-
-        {/* User footer */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>{user?.name}</div>
-          <div style={{ fontSize: 11, opacity: 0.5, marginBottom: 10 }}>{user?.role} · {user?.department}</div>
-          <button onClick={handleLogout} style={{
-            background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff',
-            padding: '6px 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer', width: '100%',
-          }}>Sign Out</button>
-        </div>
-      </aside>
-
-      {/* Main */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Top bar */}
-        <header style={{
-          height: 56, background: '#fff', borderBottom: '1px solid #e5e7eb',
-          display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-          padding: '0 20px', flexShrink: 0, gap: 12,
-        }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>
-            Welcome, <strong style={{ color: '#111827' }}>{user?.name?.split(' ')[0]}</strong>
-          </div>
+        {/* Right side: bell + avatar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <NotificationBell />
+
+          {/* Avatar / profile button */}
           <button
             onClick={() => setProfileOpen(true)}
             title="My Profile"
-            style={{ background: 'none', border: '2px solid transparent', borderRadius: '50%', padding: 2, cursor: 'pointer', transition: 'border-color 0.15s' }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = '#3b82f6'}
-            onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}
+            style={{
+              background: C.brand, border: '2px solid rgba(255,255,255,0.4)',
+              borderRadius: '50%', width: 30, height: 30,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', overflow: 'hidden', padding: 0,
+              flexShrink: 0,
+            }}
           >
-            <Avatar src={profilePic} name={user?.name} size={34} />
+            {profilePic
+              ? <img src={profilePic} alt={user?.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <span style={{ fontSize: 11, fontWeight: 700, color: '#fff' }}>{initials}</span>
+            }
           </button>
-        </header>
 
-        {/* Page content */}
-        <main style={{ flex: 1, overflowY: 'auto', background: '#f8fafc' }}>
+          {/* Sign out */}
+          <button
+            onClick={handleLogout}
+            title="Sign Out"
+            style={{
+              background: 'none', border: '1px solid rgba(255,255,255,0.3)',
+              borderRadius: 4, color: 'rgba(255,255,255,0.8)',
+              fontSize: 11, padding: '4px 10px', cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+            onMouseOver={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; e.currentTarget.style.color = '#fff' }}
+            onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'rgba(255,255,255,0.8)' }}
+          >
+            Sign Out
+          </button>
+        </div>
+      </header>
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+        {/* ── Sidebar ── */}
+        <aside style={{
+          width: 220, flexShrink: 0,
+          background: C.white,
+          borderRight: `1px solid ${C.border}`,
+          display: 'flex', flexDirection: 'column',
+          overflowY: 'auto',
+          position: 'sticky',
+          top: 0,
+          height: '100%',
+          alignSelf: 'flex-start',
+        }}>
+          {/* User info strip */}
+          <div style={{
+            padding: '12px 16px 10px',
+            borderBottom: `1px solid #e8e8e8`,
+            background: '#f8f9fa',
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {user?.name}
+            </div>
+            <div style={{ fontSize: 11, color: C.label, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {user?.role}
+            </div>
+          </div>
+
+          {/* Nav items */}
+          <nav style={{ flex: 1, padding: '8px 0' }}>
+            {visibleNav.map(item => (
+              <SideNavItem
+                key={item.to}
+                item={item}
+                isActive={item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)}
+                onClick={() => nav(item.to)}
+                badge={item.to === '/workflow' ? pendingCount : 0}
+              />
+            ))}
+          </nav>
+
+          {/* Sign out at bottom */}
+          <div style={{ padding: '12px 16px', borderTop: `1px solid #e8e8e8` }}>
+            <button onClick={handleLogout} style={{
+              width: '100%', padding: '7px 12px',
+              background: 'transparent', border: `1px solid ${C.border}`,
+              borderRadius: 6, fontSize: 12, color: C.label,
+              cursor: 'pointer', fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}
+            onMouseOver={e => { e.currentTarget.style.background = '#fff0f0'; e.currentTarget.style.color = C.negative; e.currentTarget.style.borderColor = C.negative }}
+            onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.label; e.currentTarget.style.borderColor = C.border }}
+            >
+              Sign Out
+            </button>
+          </div>
+        </aside>
+
+        {/* ── Main Content ── */}
+        <main style={{ flex: 1, overflowY: 'auto', background: C.bg }}>
           <Outlet />
         </main>
       </div>
 
-      {/* Profile modal */}
       {profileOpen && (
         <ProfileModal
           user={user}
           onClose={() => setProfileOpen(false)}
-          onPictureUpdated={(url) => {
-            handlePictureUpdated(url)
-            setProfileOpen(false)
-          }}
+          onPictureUpdated={handlePictureUpdated}
         />
       )}
     </div>

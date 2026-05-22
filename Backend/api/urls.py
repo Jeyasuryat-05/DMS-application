@@ -34,6 +34,7 @@ urlpatterns = [
     path('documents/<int:doc_id>/request-edit-access', document_views.request_edit_access),
     path('access-requests/incoming', document_views.incoming_access_requests),
     path('access-requests/<int:request_id>/decide', document_views.decide_access_request),
+    path('documents/<int:doc_id>/cover-page', document_views.generate_cover_page),
     path('documents/<int:doc_id>/flag-deletion', document_views.flag_deletion),
     path('documents/<int:doc_id>/unflag-deletion', document_views.unflag_deletion),
     path('documents/<int:doc_id>/file-access-stats', document_views.file_access_stats),
@@ -89,6 +90,9 @@ urlpatterns = [
     path('admin/logs/creations/download', admin_views.creation_logs_download),
     path('admin/logs/summary', admin_views.logs_summary),
     path('admin/cover-page-template', admin_views.cover_page_template),
+    path('admin/approver-configs', admin_views.approver_configs),
+    path('admin/approver-configs/<int:config_id>', admin_views.approver_config_detail),
+    path('workflow/approver-lookup', admin_views.approver_lookup),
 
     # ── Alerts ────────────────────────────────────────────────────────────────
     path('alerts/run-job', alert_views.trigger_alert_job),

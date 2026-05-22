@@ -1955,74 +1955,378 @@ function CoverPageManager({ toast }) {
       </div>
 
       {/* Preview */}
-      {fields.length > 0 && (
-        <div style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 10,
-          padding: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.blue, marginBottom: 12 }}>
-            📋 Preview — Fields that will appear on cover page:
+      <div style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: C.blue, marginBottom: 12 }}>
+          📋 Preview — Cover page layout (NPCIL format):
+        </div>
+        <div style={{
+          background: '#fff', border: '1px solid #ccc', borderRadius: 4,
+          padding: '28px 32px', maxWidth: 560, margin: '0 auto',
+          fontFamily: 'Times New Roman, serif', fontSize: 12, color: '#111',
+        }}>
+          {/* Header */}
+          <div style={{ textAlign: 'center', marginBottom: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>NUCLEAR POWER CORPORATION OF INDIA LTD.</div>
+            <div style={{ fontSize: 12 }}>(A Government of India Enterprise)</div>
           </div>
-          <div style={{ background: '#fff', border: `1px dashed ${C.border}`, borderRadius: 8,
-            padding: 24, minHeight: 200, fontFamily: 'georgia, serif' }}>
-            <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#111' }}>COVER PAGE</div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '12px 20px' }}>
+          <div style={{ textAlign: 'center', marginBottom: 6, fontSize: 12 }}>[Document Type Name]</div>
+          <div style={{ textAlign: 'center', fontWeight: 700, marginBottom: 6 }}>[Document Number]</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'flex-start' }}>
+            <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>TITLE:</span>
+            <span style={{ fontWeight: 700, textAlign: 'center', flex: 1 }}>[Document Title]</span>
+          </div>
+
+          {/* Revision table */}
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginBottom: 14 }}>
+            <thead>
+              <tr>
+                {['REV.', 'DATE OF ISSUE (MONTH/YEAR)', 'No. OF PAGES (incl. Cover Sheet)'].map(h => (
+                  <th key={h} style={{ border: '1px solid #555', padding: '4px 6px', textAlign: 'center', fontWeight: 700 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[0,1,2].map(i => (
+                <tr key={i}>
+                  <td style={{ border: '1px solid #555', padding: '4px 6px', textAlign: 'center' }}>{i}</td>
+                  <td style={{ border: '1px solid #555', padding: '4px 6px', textAlign: 'center' }}>{['Nov-2001','Apr-2007','Feb-2010'][i]}</td>
+                  <td style={{ border: '1px solid #555', padding: '4px 6px', textAlign: 'center' }}>{['66','67','68'][i]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* ORIGINAL stamp */}
+          <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, margin: '12px 0 16px' }}>ORIGINAL</div>
+          <hr style={{ borderColor: '#555', margin: '0 0 12px' }} />
+
+          {/* Workflow roles */}
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginBottom: 14 }}>
+            <thead>
+              <tr>
+                {['', 'Name', 'Designation', 'Date'].map(h => (
+                  <th key={h} style={{ border: '1px solid #555', padding: '4px 6px', background: '#f5f5f5', textAlign: 'left', fontWeight: 700 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {['PREPARED BY', 'CHECKED BY', 'REVIEWED BY', 'APPROVED BY'].map(r => (
+                <tr key={r}>
+                  <td style={{ border: '1px solid #555', padding: '5px 6px', fontWeight: 700, whiteSpace: 'nowrap' }}>{r}</td>
+                  <td style={{ border: '1px solid #555', padding: '5px 6px', color: '#9ca3af', fontStyle: 'italic' }}>[auto-populated]</td>
+                  <td style={{ border: '1px solid #555', padding: '5px 6px', color: '#9ca3af', fontStyle: 'italic' }}>[designation]</td>
+                  <td style={{ border: '1px solid #555', padding: '5px 6px', color: '#9ca3af', fontStyle: 'italic' }}>[date]</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Custom fields */}
+          {fields.filter(f => f.show).length > 0 && (
+            <div style={{ borderTop: '1px solid #ddd', paddingTop: 10 }}>
               {fields.filter(f => f.show).map((f, idx) => (
-                <div key={idx} style={{ display: 'contents' }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: C.gray, textAlign: 'right' }}>
-                    {f.label}:
-                  </div>
-                  <div style={{ fontSize: 12, color: '#374151' }}>
-                    [auto-populated]
-                  </div>
+                <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 4, fontSize: 11 }}>
+                  <span style={{ fontWeight: 700, minWidth: 120 }}>{f.label}:</span>
+                  <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>[auto-populated]</span>
                 </div>
               ))}
             </div>
-          </div>
+          )}
+
+          {/* Footer */}
+          <hr style={{ borderColor: '#555', margin: '12px 0 6px' }} />
+          <div style={{ textAlign: 'center', fontSize: 11 }}>(FOR REVISION SEE REVISIONS CONTROL SHEET)</div>
+          <div style={{ fontSize: 10, marginTop: 4, color: '#555' }}>File Name: [Document Number]</div>
         </div>
-      )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Approver Config Panel ────────────────────────────────────────────────────
+function ApproverConfigPanel({ toast }) {
+  const [rows, setRows]     = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [form, setForm]       = useState({
+    employee_number: '', process_id: '', approver_employee_number: '',
+    approver_employee_name: '', approver_email: '', approver_level: '1',
+    final_approver_flag: 'N',
+  })
+  const [editId, setEditId]   = useState(null)
+  const [testEmp, setTestEmp] = useState('')
+  const [testProc, setTestProc] = useState('')
+  const [testResult, setTestResult] = useState(null)
+  const [testing, setTesting]   = useState(false)
+
+  function load() {
+    setLoading(true)
+    adminAPI.listApproverConfigs()
+      .then(r => setRows(r.data || []))
+      .catch(() => toast('Failed to load approver configs', 'error'))
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
+
+  function setF(k, v) { setForm(f => ({ ...f, [k]: v })) }
+
+  async function handleSave() {
+    if (!form.employee_number || !form.process_id || !form.approver_employee_number || !form.approver_employee_name) {
+      toast('Employee number, Process ID, Approver number, and Approver name are required', 'error'); return
+    }
+    setSaving(true)
+    try {
+      const payload = { ...form, approver_level: parseInt(form.approver_level) || 1 }
+      if (editId) {
+        await adminAPI.updateApproverConfig(editId, payload)
+        toast('Approver config updated', 'success')
+      } else {
+        await adminAPI.createApproverConfig(payload)
+        toast('Approver config created', 'success')
+      }
+      setForm({ employee_number:'', process_id:'', approver_employee_number:'',
+        approver_employee_name:'', approver_email:'', approver_level:'1', final_approver_flag:'N' })
+      setEditId(null)
+      load()
+    } catch(e) {
+      toast(e.response?.data?.detail || 'Save failed', 'error')
+    } finally { setSaving(false) }
+  }
+
+  function handleEdit(row) {
+    setEditId(row.id)
+    setForm({
+      employee_number: row.employee_number, process_id: row.process_id,
+      approver_employee_number: row.approver_employee_number,
+      approver_employee_name: row.approver_employee_name,
+      approver_email: row.approver_email || '',
+      approver_level: String(row.approver_level),
+      final_approver_flag: row.final_approver_flag || 'N',
+    })
+  }
+
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this approver config?')) return
+    try {
+      await adminAPI.deleteApproverConfig(id)
+      toast('Deleted', 'success')
+      load()
+    } catch { toast('Delete failed', 'error') }
+  }
+
+  async function handleTest() {
+    if (!testEmp || !testProc) { toast('Enter employee number and process ID to test', 'error'); return }
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await adminAPI.listApproverConfigs()
+      // filter client-side to simulate the API
+      const filtered = (res.data || []).filter(
+        r => r.employee_number === testEmp && r.process_id === testProc
+      ).sort((a,b) => a.approver_level - b.approver_level)
+      setTestResult(filtered)
+    } catch { toast('Test failed', 'error') }
+    finally { setTesting(false) }
+  }
+
+  const inp = { padding:'6px 10px', borderRadius:6, border:`1px solid ${C.border}`,
+    fontSize:12, width:'100%', boxSizing:'border-box' }
+
+  return (
+    <div style={{ maxWidth: 1000 }}>
+      <div style={{ fontSize:14, fontWeight:600, color:C.blue, marginBottom:4 }}>
+        ⚙ Workflow Approver Configuration
+      </div>
+      <div style={{ fontSize:12, color:C.gray, marginBottom:20 }}>
+        Configure mock approver chains per employee and process. Used by the Workflow Approver Lookup API
+        (Input: employee_number + process_id → Output: ordered approver chain with levels and final approver flag).
+      </div>
+
+      {/* Form */}
+      <div style={{ background:'#fff', border:`1px solid ${C.border}`, borderRadius:10, padding:20, marginBottom:20 }}>
+        <div style={{ fontSize:12, fontWeight:600, color:C.gray, marginBottom:12 }}>
+          {editId ? '✏ Edit Approver Row' : '+ Add Approver Row'}
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'10px 14px', marginBottom:12 }}>
+          <div><div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Employee Number *</div>
+            <input value={form.employee_number} onChange={e => setF('employee_number', e.target.value)} style={inp} placeholder="e.g. 12345678" /></div>
+          <div><div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Process ID *</div>
+            <input value={form.process_id} onChange={e => setF('process_id', e.target.value)} style={inp} placeholder="e.g. LEAVE_APPROVAL" /></div>
+          <div><div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Approver Emp. No. *</div>
+            <input value={form.approver_employee_number} onChange={e => setF('approver_employee_number', e.target.value)} style={inp} placeholder="e.g. 87654321" /></div>
+          <div><div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Approver Name *</div>
+            <input value={form.approver_employee_name} onChange={e => setF('approver_employee_name', e.target.value)} style={inp} placeholder="Full name" /></div>
+          <div><div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Approver Email</div>
+            <input value={form.approver_email} onChange={e => setF('approver_email', e.target.value)} style={inp} placeholder="email@domain.com" /></div>
+          <div><div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Approver Level *</div>
+            <input type="number" min="1" value={form.approver_level} onChange={e => setF('approver_level', e.target.value)} style={inp} /></div>
+          <div><div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Final Approver?</div>
+            <select value={form.final_approver_flag} onChange={e => setF('final_approver_flag', e.target.value)} style={inp}>
+              <option value="N">N — Not Final</option>
+              <option value="Y">Y — Final Approver</option>
+            </select></div>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <GBtn label={editId ? 'Update' : 'Add Row'} onClick={handleSave} disabled={saving} color={C.blue} />
+          {editId && <GBtn label="Cancel" onClick={() => { setEditId(null); setForm({ employee_number:'', process_id:'', approver_employee_number:'', approver_employee_name:'', approver_email:'', approver_level:'1', final_approver_flag:'N' }) }} color={C.gray} />}
+        </div>
+      </div>
+
+      {/* Grid */}
+      <div style={{ background:'#fff', border:`1px solid ${C.border}`, borderRadius:10, overflow:'hidden', marginBottom:24 }}>
+        {loading ? <div style={{ padding:24, textAlign:'center', color:C.gray }}>Loading…</div> : (
+          rows.length === 0 ? (
+            <div style={{ padding:24, textAlign:'center', color:C.gray, fontSize:13 }}>No approver configs yet. Add rows above.</div>
+          ) : (
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                <thead>
+                  <tr style={{ background:C.bg, borderBottom:`2px solid ${C.accent}` }}>
+                    {['Emp No.','Process ID','Approver Emp No.','Approver Name','Approver Email','Level','Final?','Actions'].map(h => (
+                      <th key={h} style={{ padding:'8px 10px', textAlign:'left', fontWeight:600, color:C.blue, whiteSpace:'nowrap' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(r => (
+                    <tr key={r.id} style={{ borderBottom:`1px solid ${C.border}` }}
+                      onMouseEnter={e => e.currentTarget.style.background=C.rowHover}
+                      onMouseLeave={e => e.currentTarget.style.background=''}>
+                      <td style={{ padding:'8px 10px' }}>{r.employee_number}</td>
+                      <td style={{ padding:'8px 10px' }}>{r.process_id}</td>
+                      <td style={{ padding:'8px 10px' }}>{r.approver_employee_number}</td>
+                      <td style={{ padding:'8px 10px', fontWeight:500 }}>{r.approver_employee_name}</td>
+                      <td style={{ padding:'8px 10px', color:C.gray }}>{r.approver_email || '—'}</td>
+                      <td style={{ padding:'8px 10px', textAlign:'center' }}>{r.approver_level}</td>
+                      <td style={{ padding:'8px 10px', textAlign:'center' }}>
+                        <span style={{ fontWeight:700, color: r.final_approver_flag === 'Y' ? C.green : C.gray }}>{r.final_approver_flag}</span>
+                      </td>
+                      <td style={{ padding:'8px 10px', whiteSpace:'nowrap' }}>
+                        <button onClick={() => handleEdit(r)} style={{ marginRight:6, padding:'2px 8px', borderRadius:5, border:`1px solid ${C.blue}`, background:'#fff', color:C.blue, cursor:'pointer', fontSize:11 }}>Edit</button>
+                        <button onClick={() => handleDelete(r.id)} style={{ padding:'2px 8px', borderRadius:5, border:`1px solid ${C.red}`, background:'#fff', color:C.red, cursor:'pointer', fontSize:11 }}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        )}
+      </div>
+
+      {/* API Test Panel */}
+      <div style={{ background:'#f8fafc', border:`1px solid ${C.border}`, borderRadius:10, padding:20 }}>
+        <div style={{ fontSize:13, fontWeight:600, color:C.blue, marginBottom:12 }}>🧪 Test Approver Lookup API</div>
+        <div style={{ display:'flex', gap:10, alignItems:'flex-end', marginBottom:12 }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Employee Number</div>
+            <input value={testEmp} onChange={e => setTestEmp(e.target.value)} style={{ ...inp, width:'100%' }} placeholder="e.g. 12345678" />
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:11, color:C.gray, marginBottom:3 }}>Process ID</div>
+            <input value={testProc} onChange={e => setTestProc(e.target.value)} style={{ ...inp, width:'100%' }} placeholder="e.g. LEAVE_APPROVAL" />
+          </div>
+          <GBtn label={testing ? 'Testing…' : 'Run Lookup'} onClick={handleTest} disabled={testing} color={C.green} />
+        </div>
+        {testResult !== null && (
+          testResult.length === 0
+            ? <div style={{ fontSize:12, color:C.gray }}>No approver chain found for this employee + process combination.</div>
+            : (
+              <div>
+                <div style={{ fontSize:11, color:C.gray, marginBottom:6 }}>Result ({testResult.length} level{testResult.length !== 1 ? 's' : ''}):</div>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                  <thead>
+                    <tr style={{ background:C.bg }}>
+                      {['Level','Approver Emp No.','Approver Name','Email','Final?'].map(h => (
+                        <th key={h} style={{ padding:'6px 8px', textAlign:'left', fontWeight:600, color:C.blue, border:`1px solid ${C.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {testResult.map((r,i) => (
+                      <tr key={i}>
+                        <td style={{ padding:'6px 8px', border:`1px solid ${C.border}`, textAlign:'center' }}>{r.approver_level}</td>
+                        <td style={{ padding:'6px 8px', border:`1px solid ${C.border}` }}>{r.approver_employee_number}</td>
+                        <td style={{ padding:'6px 8px', border:`1px solid ${C.border}`, fontWeight:500 }}>{r.approver_employee_name}</td>
+                        <td style={{ padding:'6px 8px', border:`1px solid ${C.border}`, color:C.gray }}>{r.approver_email || '—'}</td>
+                        <td style={{ padding:'6px 8px', border:`1px solid ${C.border}`, textAlign:'center', fontWeight:700, color: r.final_approver_flag === 'Y' ? C.green : C.gray }}>{r.final_approver_flag}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+        )}
+        <div style={{ marginTop:12, fontSize:11, color:C.gray }}>
+          API endpoint: <code style={{ background:'#e5e7eb', padding:'1px 5px', borderRadius:3 }}>GET /api/workflow/approver-lookup?employee_number=&process_id=</code>
+        </div>
+      </div>
     </div>
   )
 }
 
 // ─── Main Admin page ──────────────────────────────────────────────────────────
 const TABS = [
-  { id:'users',    label:'👤 Users' },
-  { id:'doctypes', label:'📂 Document Types' },
-  { id:'cover',    label:'📄 Cover Page' },
-  { id:'config',   label:'⚙️ System Config' },
-  { id:'flagged',  label:'🚩 Flagged for Deletion' },
-  { id:'logs',     label:'📋 Activity Logs' },
+  { id:'users',    label:'Users' },
+  { id:'doctypes', label:'Document Types' },
+  { id:'cover',    label:'Cover Page' },
+  { id:'approver', label:'Approver API' },
+  { id:'config',   label:'System Config' },
+  { id:'flagged',  label:'Flagged for Deletion' },
+  { id:'logs',     label:'Activity Logs' },
 ]
 
 export default function Admin() {
   const location = useLocation()
-  const [tab, setTab]   = useState(location.state?.tab || 'users')
+  const [tab, setTab]      = useState(location.state?.tab || 'users')
   const [toast, showToast] = useToast()
 
   return (
-    <div style={{padding:'28px 32px',fontFamily:'system-ui,-apple-system,sans-serif'}}>
-      <div style={{marginBottom:24}}>
-        <h1 style={{margin:'0 0 4px',fontSize:20,fontWeight:700}}>Administration</h1>
-        <p style={{margin:0,color:C.gray,fontSize:13}}>Manage users, document types, file formats and system configuration</p>
+    <div style={{ padding: '24px 28px', background: '#F5F6F7', minHeight: '100%' }}>
+
+      {/* ── Page header ── */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: '#32363A' }}>Administration</div>
+        <div style={{ fontSize: 13, color: '#6A6D70', marginTop: 3 }}>
+          Manage users, document types, file formats and system configuration
+        </div>
       </div>
 
-      {/* Tab bar */}
-      <div style={{display:'flex',gap:2,borderBottom:`2px solid ${C.border}`,marginBottom:24}}>
-        {TABS.map(t=>(
-          <button key={t.id} onClick={()=>setTab(t.id)} style={{
-            padding:'9px 20px',border:'none',background:'none',cursor:'pointer',
-            fontSize:13,fontWeight:tab===t.id?700:400,fontFamily:'inherit',
-            color:tab===t.id?C.blue:C.gray,
-            borderBottom:tab===t.id?`3px solid ${C.blue}`:'3px solid transparent',
-            marginBottom:-2,
-          }}>{t.label}</button>
-        ))}
+      {/* ── Tab bar ── */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap',
+        borderBottom: '2px solid #D9D9D9',
+        marginBottom: 20,
+        background: '#fff',
+        borderRadius: '6px 6px 0 0',
+        overflow: 'hidden',
+      }}>
+        {TABS.map(t => {
+          const active = tab === t.id
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding: '10px 18px',
+              fontSize: 13, fontWeight: active ? 700 : 400,
+              color: active ? '#0070F2' : '#6A6D70',
+              background: active ? '#EBF5FE' : 'transparent',
+              border: 'none',
+              borderBottom: active ? '2px solid #0070F2' : '2px solid transparent',
+              marginBottom: -2,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              transition: 'all 0.15s',
+              whiteSpace: 'nowrap',
+            }}>
+              {t.label}
+            </button>
+          )
+        })}
       </div>
 
       {tab==='users'    && <UsersGrid             toast={showToast} />}
       {tab==='doctypes' && <DocTypesGrid          toast={showToast} />}
       {tab==='cover'    && <CoverPageManager      toast={showToast} />}
+      {tab==='approver' && <ApproverConfigPanel   toast={showToast} />}
       {tab==='config'   && <SystemConfigPanel     toast={showToast} />}
       {tab==='flagged'  && <FlaggedDocumentsPanel toast={showToast} />}
       {tab==='logs'     && <ActivityLogsPanel     toast={showToast} />}

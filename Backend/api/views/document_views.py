@@ -1,4 +1,4 @@
-import os, uuid, json, traceback, mimetypes
+import io, os, uuid, json, traceback, mimetypes
 from datetime import datetime, timedelta
 from django.conf import settings
 from django.utils import timezone
@@ -13,6 +13,7 @@ from api.models import (
     Document, DocumentType, DocumentVersion, DocumentFile,
     DocumentReference, DocumentFeedback, AuditLog, FileAccessLog,
     WorkflowInstance, WorkflowHistorySnapshot, User, EditAccessRequest,
+    CoverPageTemplate,
 )
 from api import email_utils
 from api.authentication import (
@@ -135,6 +136,7 @@ def _doc_to_dict(d):
             'flagged_by_id': d.flagged_by_id,
             'doc_type': doc_type_dict,
             'workflow': workflow_dict,
+            'on_behalf_of_id': d.on_behalf_of_id,
         }
     except Exception:
         return {'id': d.id, 'title': d.title or '', 'status': 'Draft', 'doc_number': '', 'current_version': '1.0'}
@@ -270,6 +272,15 @@ def _create_document(request):
         change_reason = request.data.get('change_reason', 'Initial upload')
         files = request.FILES.getlist('files')
 
+        # On-behalf-of: admin/employee can create a document for another user
+        on_behalf_of_id = request.data.get('on_behalf_of_id')
+        on_behalf_of_user = None
+        if on_behalf_of_id:
+            try:
+                on_behalf_of_user = User.objects.get(id=int(on_behalf_of_id), is_active=True)
+            except (User.DoesNotExist, ValueError):
+                return Response({'error': 'on_behalf_of user not found'}, status=400)
+
         try:
             doc_type = DocumentType.objects.get(id=doc_type_id)
         except DocumentType.DoesNotExist:
@@ -341,6 +352,7 @@ def _create_document(request):
             usi_kks_code=usi_from_meta,
             confidential=confidential,
             creator_id=request.user.id,
+            on_behalf_of=on_behalf_of_user,
             expiry_date=datetime.fromisoformat(expiry_date) if expiry_date else None,
             revision_due=datetime.fromisoformat(revision_due) if revision_due else None,
             custom_metadata=parsed_meta,
@@ -420,7 +432,7 @@ def _get_document(request, doc_id):
     try:
         try:
             doc = Document.objects.select_related(
-                'doc_type', 'creator', 'checked_out_by', 'responsible_person'
+                'doc_type', 'creator', 'on_behalf_of', 'checked_out_by', 'responsible_person'
             ).get(id=doc_id, is_deleted=False)
         except Document.DoesNotExist:
             return Response({'error': 'Document not found'}, status=404)
@@ -445,6 +457,10 @@ def _get_document(request, doc_id):
         base['creator'] = (
             {'id': doc.creator.id, 'name': doc.creator.name, 'email': doc.creator.email}
             if doc.creator else None
+        )
+        base['on_behalf_of'] = (
+            {'id': doc.on_behalf_of.id, 'name': doc.on_behalf_of.name, 'email': doc.on_behalf_of.email}
+            if doc.on_behalf_of_id else None
         )
         base['checked_out_by'] = (
             {'id': doc.checked_out_by.id, 'name': doc.checked_out_by.name}
@@ -1235,11 +1251,22 @@ def _can_access_doc(user, doc):
 
 def _can_edit_doc(user, doc):
     """Authorization gate for modifying a document.
-    Creator and explicitly granted editors can edit. System Admin / Sub Admin
-    always can. Everyone else is rejected."""
+
+    Two conditions must both be true:
+    1. The user holds the can_edit permission flag (or is System/Sub Admin).
+    2. The user has structural access — they are the document creator, an
+       explicitly granted editor, or an admin.
+    """
     role = getattr(user, 'role', '') or ''
-    if role in ('System Admin', 'Sub Admin'):
+    is_admin = role in ('System Admin', 'Sub Admin')
+
+    # Admins bypass the permission flag check
+    if not is_admin and not getattr(user, 'can_edit', False):
+        return False
+
+    if is_admin:
         return True
+
     uid = getattr(user, 'id', None)
     if doc.creator_id == uid:
         return True
@@ -1537,3 +1564,259 @@ def search_users(request):
         }
         for u in qs
     ])
+
+
+# ─── Cover Page PDF Generation ────────────────────────────────────────────────
+
+@api_view(['GET'])
+def generate_cover_page(request, doc_id):
+    try:
+        doc = Document.objects.select_related(
+            'doc_type', 'creator', 'responsible_person'
+        ).get(id=doc_id)
+    except Document.DoesNotExist:
+        return Response({'error': 'Document not found'}, status=404)
+
+    # Gather workflow role assignments (Prepare/Check/Review/Approve)
+    role_map = {}  # stage_name -> list of {'name', 'designation'}
+    try:
+        wf = doc.workflow
+        for task in wf.tasks.select_related('assignee').order_by('step'):
+            level_name = task.level.name if task.level else f'Step {task.step}'
+            entry = {
+                'name': task.assignee.name if task.assignee else '',
+                'designation': (
+                    task.assignee.functional_designation_text_1
+                    or task.assignee.position_text
+                    or task.assignee.department
+                    or ''
+                ) if task.assignee else '',
+                'date': task.completed_at.strftime('%d/%m/%Y') if task.completed_at else '',
+            }
+            role_map.setdefault(level_name, []).append(entry)
+    except Exception:
+        pass
+
+    # Completed workflow history fallback for released docs
+    if not role_map:
+        try:
+            snap = WorkflowHistorySnapshot.objects.filter(document=doc).order_by('-id').first()
+            if snap and snap.snapshot:
+                for level in (snap.snapshot.get('levels') or []):
+                    lname = level.get('name', '')
+                    for task in (level.get('tasks') or []):
+                        assignee_name = task.get('assignee', {}).get('name', '') if task.get('assignee') else ''
+                        role_map.setdefault(lname, []).append({
+                            'name': assignee_name,
+                            'designation': '',
+                            'date': task.get('completed_at', ''),
+                        })
+        except Exception:
+            pass
+
+    # Version history for revision table
+    versions = list(
+        DocumentVersion.objects.filter(document=doc)
+        .select_related('created_by')
+        .order_by('created_at')
+    )
+
+    # Custom template fields configured by admin
+    template = CoverPageTemplate.objects.first()
+    custom_fields = []
+    if template and template.fields:
+        for f in template.fields:
+            if not f.get('show', True):
+                continue
+            ftype = f.get('type', '')
+            label = f.get('label', '')
+            value = _resolve_cover_field(ftype, doc, request.user)
+            custom_fields.append((label, value))
+
+    pdf_bytes = _build_cover_page_pdf(doc, role_map, versions, custom_fields)
+    safe_title = (doc.doc_number or 'cover').replace('/', '-').replace(' ', '_')
+    response = HttpResponse(pdf_bytes, content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{safe_title}_cover_page.pdf"'
+    return response
+
+
+def _resolve_cover_field(ftype, doc, user):
+    mapping = {
+        'document_title':  doc.title or '',
+        'document_number': doc.doc_number or '',
+        'revision':        doc.current_version or '',
+        'prepared_by':     doc.creator.name if doc.creator else '',
+        'date_issued':     doc.created_at.strftime('%d/%m/%Y') if doc.created_at else '',
+        'department':      (doc.creator.department if doc.creator else '') or '',
+        'classification':  'Confidential' if doc.confidential else 'Internal',
+        'project_name':    doc.project or '',
+        'status':          doc.status or '',
+        'reference':       doc.doc_number or '',
+    }
+    return mapping.get(ftype, '')
+
+
+def _build_cover_page_pdf(doc, role_map, versions, custom_fields):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+
+    buf = io.BytesIO()
+    doc_obj = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=20*mm, rightMargin=20*mm,
+        topMargin=15*mm, bottomMargin=15*mm,
+    )
+
+    styles = getSampleStyleSheet()
+    W = A4[0] - 40*mm  # usable width
+
+    def style(name='Normal', **kw):
+        s = styles[name].clone(name + str(id(kw)))
+        for k, v in kw.items():
+            setattr(s, k, v)
+        return s
+
+    bold_center  = style('Normal', fontSize=11, fontName='Helvetica-Bold', alignment=TA_CENTER, leading=14)
+    center       = style('Normal', fontSize=10, alignment=TA_CENTER, leading=13)
+    left_bold    = style('Normal', fontSize=10, fontName='Helvetica-Bold', alignment=TA_LEFT, leading=13)
+    left_normal  = style('Normal', fontSize=10, alignment=TA_LEFT, leading=13)
+    small_center = style('Normal', fontSize=9,  alignment=TA_CENTER, leading=12)
+    small_left   = style('Normal', fontSize=9,  alignment=TA_LEFT,   leading=12)
+    tiny_center  = style('Normal', fontSize=8,  alignment=TA_CENTER, leading=11)
+    tiny_left    = style('Normal', fontSize=8,  alignment=TA_LEFT,   leading=11)
+
+    story = []
+
+    # ── Organisation header ───────────────────────────────────────────────────
+    story.append(Paragraph('NUCLEAR POWER CORPORATION OF INDIA LTD.', bold_center))
+    story.append(Paragraph('(A Government of India Enterprise)', center))
+    story.append(Spacer(1, 8*mm))
+
+    # ── Document type / number / title ────────────────────────────────────────
+    doc_type_name = doc.doc_type.name.upper() if doc.doc_type else 'PROCEDURE'
+    story.append(Paragraph(doc_type_name, center))
+    story.append(Spacer(1, 3*mm))
+    story.append(Paragraph(doc.doc_number or '', bold_center))
+    story.append(Spacer(1, 4*mm))
+
+    title_label = Paragraph('<b>TITLE:</b>', left_bold)
+    title_value = Paragraph(f'<b>{(doc.title or "").upper()}</b>', bold_center)
+    title_tbl = Table(
+        [[title_label, title_value]],
+        colWidths=[20*mm, W - 20*mm],
+    )
+    title_tbl.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
+    story.append(title_tbl)
+    story.append(Spacer(1, 6*mm))
+
+    # ── Revision table ────────────────────────────────────────────────────────
+    rev_header = ['REV.', 'DATE OF ISSUE\n(MONTH/YEAR)', 'No. OF PAGES\n(incl. Cover Sheet)']
+    rev_rows = [rev_header]
+    if versions:
+        for v in versions[:6]:
+            dt = v.created_at.strftime('%b-%Y') if v.created_at else ''
+            rev_rows.append([v.version_number or '', dt, ''])
+    else:
+        rev_rows.append(['0', doc.created_at.strftime('%b-%Y') if doc.created_at else '', ''])
+
+    rev_tbl = Table(rev_rows, colWidths=[W/3, W/3, W/3])
+    rev_tbl.setStyle(TableStyle([
+        ('FONTNAME',    (0,0), (-1,0),  'Helvetica-Bold'),
+        ('FONTSIZE',    (0,0), (-1,-1), 8),
+        ('ALIGN',       (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN',      (0,0), (-1,-1), 'MIDDLE'),
+        ('GRID',        (0,0), (-1,-1), 0.5, colors.black),
+        ('BACKGROUND',  (0,0), (-1,0),  colors.white),
+        ('ROWBACKGROUNDS', (1,0), (-1,-1), [colors.white]),
+        ('TOPPADDING',  (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 3),
+    ]))
+    story.append(rev_tbl)
+    story.append(Spacer(1, 6*mm))
+
+    # ── ORIGINAL stamp ────────────────────────────────────────────────────────
+    story.append(Paragraph('<b>ORIGINAL</b>', bold_center))
+    story.append(Spacer(1, 8*mm))
+    story.append(HRFlowable(width=W, thickness=0.5, color=colors.black))
+    story.append(Spacer(1, 4*mm))
+
+    # ── Workflow roles: Prepared / Checked / Reviewed / Approved ─────────────
+    ROLE_ORDER = ['Prepare', 'Check', 'Review', 'Approve']
+
+    def first_entry(stage_key):
+        for key, entries in role_map.items():
+            if stage_key.lower() in key.lower():
+                return entries[0] if entries else {}
+        return {}
+
+    prep   = first_entry('Prepare') or {'name': doc.creator.name if doc.creator else '', 'designation': '', 'date': ''}
+    check  = first_entry('Check')
+    review = first_entry('Review')
+    appr   = first_entry('Approve')
+
+    def role_block(role_label, entry):
+        name  = entry.get('name', '')
+        desig = entry.get('designation', '')
+        date  = entry.get('date', '')
+        return [
+            Paragraph(f'<b>{role_label}</b>', small_left),
+            Paragraph(name, small_left),
+            Paragraph(desig, small_left),
+            Paragraph(date, small_left),
+        ]
+
+    roles_data = [
+        ['', 'Name', 'Designation', 'Date'],
+        ['PREPARED BY', prep.get('name',''), prep.get('designation',''), prep.get('date','')],
+        ['CHECKED BY',  check.get('name',''), check.get('designation',''), check.get('date','')],
+        ['REVIEWED BY', review.get('name',''), review.get('designation',''), review.get('date','')],
+        ['APPROVED BY', appr.get('name',''), appr.get('designation',''), appr.get('date','')],
+    ]
+
+    roles_tbl = Table(roles_data, colWidths=[30*mm, W - 90*mm, 35*mm, 25*mm])
+    roles_tbl.setStyle(TableStyle([
+        ('FONTNAME',      (0,0),  (-1,0),  'Helvetica-Bold'),
+        ('FONTNAME',      (0,1),  (0,-1),  'Helvetica-Bold'),
+        ('FONTSIZE',      (0,0),  (-1,-1), 9),
+        ('ALIGN',         (0,0),  (-1,-1), 'LEFT'),
+        ('VALIGN',        (0,0),  (-1,-1), 'MIDDLE'),
+        ('GRID',          (0,0),  (-1,-1), 0.5, colors.black),
+        ('BACKGROUND',    (0,0),  (-1,0),  colors.lightgrey),
+        ('TOPPADDING',    (0,0),  (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0),  (-1,-1), 4),
+        ('LEFTPADDING',   (0,0),  (-1,-1), 4),
+    ]))
+    story.append(roles_tbl)
+    story.append(Spacer(1, 6*mm))
+
+    # ── Custom template fields ────────────────────────────────────────────────
+    if custom_fields:
+        story.append(HRFlowable(width=W, thickness=0.5, color=colors.lightgrey))
+        story.append(Spacer(1, 3*mm))
+        cf_data = [[Paragraph(f'<b>{lbl}:</b>', tiny_left), Paragraph(val, tiny_left)]
+                   for lbl, val in custom_fields]
+        cf_tbl = Table(cf_data, colWidths=[40*mm, W - 40*mm])
+        cf_tbl.setStyle(TableStyle([
+            ('FONTSIZE',      (0,0), (-1,-1), 8),
+            ('VALIGN',        (0,0), (-1,-1), 'TOP'),
+            ('TOPPADDING',    (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+        ]))
+        story.append(cf_tbl)
+        story.append(Spacer(1, 4*mm))
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    story.append(HRFlowable(width=W, thickness=0.5, color=colors.black))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph('(FOR REVISION SEE REVISIONS CONTROL SHEET)', small_center))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph(f'File Name: {doc.doc_number or ""}', tiny_left))
+
+    doc_obj.build(story)
+    return buf.getvalue()

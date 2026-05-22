@@ -262,6 +262,8 @@ class Document(models.Model):
     flagged_by_id   = models.IntegerField(null=True, blank=True)
     creator         = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,
                                         related_name='created_docs', db_column='creator_id')
+    on_behalf_of    = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                        related_name='behalf_docs', db_column='on_behalf_of_id')
     responsible_person = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
                                            related_name='responsible_docs', db_column='responsible_person_id')
     editors         = models.ManyToManyField(User, blank=True, related_name='editable_docs')
@@ -458,3 +460,27 @@ class CoverPageTemplate(models.Model):
 
     class Meta:
         db_table = 'cover_page_templates'
+
+
+class ApproverConfig(models.Model):
+    """Mock approver chain data for workflow API testing.
+    Stores one row per approver level for a given employee + process combination.
+    Mirrors the Workflow API Structure xlsx:
+      Input:  employee_number, process_id
+      Output: employee_number, employee_name, approver_employee_number,
+              approver_employee_name, approver_email, approver_level,
+              final_approver_flag
+    """
+    employee_number          = models.CharField(max_length=8)
+    process_id               = models.CharField(max_length=50)
+    approver_employee_number = models.CharField(max_length=8)
+    approver_employee_name   = models.CharField(max_length=100)
+    approver_email           = models.CharField(max_length=241, blank=True, default='')
+    approver_level           = models.IntegerField(default=1)
+    final_approver_flag      = models.CharField(max_length=1, default='N')  # 'Y' or 'N'
+    created_at               = models.DateTimeField(auto_now_add=True)
+    updated_at               = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'approver_configs'
+        ordering = ['employee_number', 'process_id', 'approver_level']

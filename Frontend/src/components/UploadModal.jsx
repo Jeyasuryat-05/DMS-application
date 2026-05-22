@@ -1,8 +1,12 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { documentsAPI, adminAPI } from '../api'
 import { Modal, Input, Select, Btn, SearchableSelect } from './ui'
+import { useAuth } from '../hooks/useAuth'
 
 export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }) {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'System Admin' || user?.role === 'Sub-Admin'
+
   const [docTypes, setDocTypes]   = useState([])
   const [selDocType, setSelDocType] = useState(null)  // full doc type object
   const [form, setForm] = useState({
@@ -17,7 +21,22 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
   const [error, setError]       = useState('')
   const [pdfPageCount, setPdfPageCount] = useState(null)
 
+  // On-behalf-of
+  const [onBehalfOf, setOnBehalfOf]   = useState(null)   // selected user object
+  const [userSearch, setUserSearch]   = useState('')
+  const [userResults, setUserResults] = useState([])
+  const [userSearching, setUserSearching] = useState(false)
+
   useEffect(() => { adminAPI.listDocTypes().then(r => setDocTypes(r.data)) }, [])
+
+  useEffect(() => {
+    if (!userSearch.trim() || userSearch.length < 2) { setUserResults([]); return }
+    setUserSearching(true)
+    documentsAPI.searchUsers(userSearch)
+      .then(r => setUserResults(r.data || []))
+      .catch(() => setUserResults([]))
+      .finally(() => setUserSearching(false))
+  }, [userSearch])
 
   // When doc type changes, set selected doc type object & reset custom metadata
   useEffect(() => {
@@ -141,6 +160,7 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
         else fd.append(k, v === true ? 'true' : v === false ? 'false' : v)
       })
       fd.append('custom_metadata', JSON.stringify(customMeta))
+      if (onBehalfOf) fd.append('on_behalf_of_id', onBehalfOf.id)
       files.forEach(f => fd.append('files', f))
       await documentsAPI.create(fd)
       onSuccess(); onClose()
@@ -416,6 +436,56 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
           <div style={{ gridColumn:'1/-1' }}>
             <Input label="Change Reason / Notes" value={form.change_reason}
               onChange={v => set('change_reason', v)} />
+          </div>
+
+          {/* On-behalf-of — visible to all users, not just admins */}
+          <div style={{ gridColumn:'1/-1', marginTop:4 }}>
+            <div style={{ fontSize:11, color:'#6b7280', marginBottom:4, fontWeight:600 }}>
+              Create on behalf of (optional)
+            </div>
+            {onBehalfOf ? (
+              <div style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 12px',
+                border:'1px solid #185FA5', borderRadius:7, background:'#E6F1FB', fontSize:13 }}>
+                <span style={{ flex:1, color:'#0C447C', fontWeight:600 }}>
+                  👤 {onBehalfOf.name} ({onBehalfOf.email})
+                </span>
+                <button type="button" onClick={() => { setOnBehalfOf(null); setUserSearch('') }}
+                  style={{ background:'none', border:'none', cursor:'pointer', color:'#A32D2D', fontWeight:700, fontSize:15 }}>×</button>
+              </div>
+            ) : (
+              <div style={{ position:'relative' }}>
+                <input
+                  value={userSearch}
+                  onChange={e => setUserSearch(e.target.value)}
+                  placeholder="Search by name, employee ID, or email…"
+                  style={{ width:'100%', boxSizing:'border-box', padding:'7px 12px',
+                    border:'1px solid #d1d5db', borderRadius:7, fontSize:13 }}
+                />
+                {userSearching && (
+                  <div style={{ position:'absolute', right:10, top:9, fontSize:11, color:'#9ca3af' }}>Searching…</div>
+                )}
+                {userResults.length > 0 && (
+                  <div style={{ position:'absolute', zIndex:50, top:'100%', left:0, right:0,
+                    background:'#fff', border:'1px solid #d1d5db', borderRadius:7,
+                    boxShadow:'0 4px 12px rgba(0,0,0,0.1)', maxHeight:180, overflowY:'auto' }}>
+                    {userResults.map(u => (
+                      <div key={u.id}
+                        onClick={() => { setOnBehalfOf(u); setUserSearch(''); setUserResults([]) }}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:13,
+                          borderBottom:'1px solid #f3f4f6' }}
+                        onMouseEnter={e => e.currentTarget.style.background='#f0f7ff'}
+                        onMouseLeave={e => e.currentTarget.style.background=''}>
+                        <div style={{ fontWeight:500 }}>{u.name}</div>
+                        <div style={{ fontSize:11, color:'#6b7280' }}>{u.email} · {u.department || u.role || ''}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{ fontSize:10, color:'#9ca3af', marginTop:3 }}>
+              Document will be created by you but attributed to the selected employee.
+            </div>
           </div>
         </div>
 
