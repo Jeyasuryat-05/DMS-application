@@ -24,9 +24,10 @@ _CREATION_ACTIONS = ['Document Created']
 
 
 def _require_admin(request):
-    if request.user.role != 'System Admin':
-        return False
-    return True
+    """Return a 403 Response if the user is not System Admin, else None."""
+    if getattr(request.user, 'role', '') != 'System Admin':
+        return Response({'error': 'System Admin role required'}, status=403)
+    return None
 
 
 def _iso(dt):
@@ -98,7 +99,7 @@ def _user_to_dict(user):
     return base
 
 
-def _dt_to_dict(dt):
+def _dt_to_dict(dt, include_auth_code=False):
     fmts = list(dt.doctypefileformat_set.values('id', 'extension', 'label', 'icon', 'mime_type'))
     return {
         'id': dt.id,
@@ -106,7 +107,9 @@ def _dt_to_dict(dt):
         'name': dt.name,
         'description': dt.description,
         'auth_required': dt.auth_required,
-        'auth_code': dt.auth_code,
+        # auth_code is only returned to System Admins — it would otherwise let
+        # any DMS user bypass the restricted document-type gate.
+        'auth_code': dt.auth_code if include_auth_code else None,
         'metadata_schema': dt.metadata_schema,
         'number_pattern': dt.number_pattern,
         'is_active': dt.is_active,
@@ -121,8 +124,8 @@ def _dt_to_dict(dt):
 @api_view(['GET', 'PUT'])
 @parser_classes([JSONParser])
 def system_config(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
 
     if request.method == 'GET':
         keys = ['auth_code_enabled', 'sap_sso_enabled', 'sap_sso_entity_id',
@@ -152,8 +155,9 @@ def system_config(request):
 @parser_classes([JSONParser])
 def users(request):
     if request.method == 'GET':
-        if not _require_admin(request):
-            return Response({'error': 'System Admin role required'}, status=403)
+        err = _require_admin(request)
+        if err:
+            return err
         q = request.query_params.get('q')
         department = request.query_params.get('department')
         role = request.query_params.get('role')
@@ -189,8 +193,8 @@ def users(request):
         return Response([_user_to_dict(u) for u in qs[skip:skip + limit]])
 
     # POST
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     data = request.data
     if User.objects.filter(email=data.get('email', '')).exists():
         return Response({'error': 'Email already registered'}, status=400)
@@ -219,8 +223,8 @@ def users(request):
 @api_view(['PUT', 'DELETE'])
 @parser_classes([JSONParser])
 def user_detail(request, user_id):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
@@ -254,8 +258,8 @@ def user_detail(request, user_id):
 
 @api_view(['POST'])
 def activate_user(request, user_id):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
@@ -278,8 +282,8 @@ def document_types(request):
             dts = dts.filter(is_structure_folder=False)
         return Response([_dt_to_dict(dt) for dt in dts])
 
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     data = request.data
     with transaction.atomic():
         dt = DocumentType.objects.create(
@@ -302,14 +306,14 @@ def document_types(request):
             )
         AlertConfig.objects.create(doc_type_id=dt.id, lead_days='30,15,7', enabled=True)
         WorkflowConfig.objects.create(doc_type_id=dt.id)
-    return Response(_dt_to_dict(dt), status=201)
+    return Response(_dt_to_dict(dt, include_auth_code=True), status=201)
 
 
 @api_view(['PUT'])
 @parser_classes([JSONParser])
 def document_type_detail(request, dt_id):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     try:
         dt = DocumentType.objects.get(id=dt_id)
     except DocumentType.DoesNotExist:
@@ -331,7 +335,7 @@ def document_type_detail(request, dt_id):
             elif hasattr(dt, k):
                 setattr(dt, k, v)
         dt.save()
-    return Response(_dt_to_dict(dt))
+    return Response(_dt_to_dict(dt, include_auth_code=True))
 
 
 @api_view(['GET'])
@@ -350,8 +354,8 @@ def workflow_configs(request):
 @api_view(['PUT'])
 @parser_classes([JSONParser])
 def workflow_config_detail(request, doc_type_id):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     cfg_obj, _ = WorkflowConfig.objects.get_or_create(doc_type_id=doc_type_id)
     cfg_obj.levels = request.data.get('levels', cfg_obj.levels)
     cfg_obj.save(update_fields=['levels'])
@@ -525,20 +529,31 @@ def seed_data(request):
                 )
                 WorkflowConfig.objects.create(doc_type_id=dt.id)
 
+            import secrets as _secrets
+            admin_created = False
+            admin_temp_pw = None
             if not User.objects.filter(email='admin@npcil.gov.in').exists():
+                # Generate a random password on first seed — printed to server
+                # stdout once. Never returned in the API response.
+                admin_temp_pw = _secrets.token_urlsafe(16)
                 User.objects.create(
                     sap_username='ADMIN', employee_id='EMP001', name='Admin User',
                     email='admin@npcil.gov.in', department='IT', role='System Admin',
                     dms_enabled=True, can_create=True, can_edit=True, can_delete=True, can_read=True,
-                    auth_codes='A1111; A1234', hashed_password=hash_password('Admin@1234'), is_active=True,
+                    auth_codes='A1111; A1234', hashed_password=hash_password(admin_temp_pw), is_active=True,
                 )
+                admin_created = True
+                # Print once to server stdout/logs — never expose in HTTP response
+                print(f'[DMS SEED] Admin account created. ONE-TIME password: {admin_temp_pw}  — change immediately after first login.')
             if not User.objects.filter(email='jeyasurya@npcil.gov.in').exists():
+                user_temp_pw = _secrets.token_urlsafe(16)
                 User.objects.create(
                     sap_username='JEYASURYAT', employee_id='EMP002', name='Jeyasurya T',
                     email='jeyasurya@npcil.gov.in', department='Engineering', role='Document Creator',
                     dms_enabled=True, can_create=True, can_edit=True, can_delete=True, can_read=True,
-                    auth_codes='A1111; A1234', hashed_password=hash_password('User@1234'), is_active=True,
+                    auth_codes='A1111; A1234', hashed_password=hash_password(user_temp_pw), is_active=True,
                 )
+                print(f'[DMS SEED] User EMP002 created. ONE-TIME password: {user_temp_pw}  — change immediately after first login.')
 
             defaults = [
                 ('app_name', 'DMS Portal'), ('app_org', 'NPCIL'),
@@ -549,7 +564,10 @@ def seed_data(request):
             for key, val in defaults:
                 SystemConfig.objects.get_or_create(key=key, defaults={'value': val})
 
-        return Response({'message': f'Seeded {len(MASTER_DOC_TYPES)} document types successfully. Login: EMP001 / Admin@1234 or admin@npcil.gov.in / Admin@1234'})
+        msg = f'Seeded {len(MASTER_DOC_TYPES)} document types successfully.'
+        if admin_created:
+            msg += ' Admin account created — check server logs for the one-time password.'
+        return Response({'message': msg})
     except Exception as e:
         error_detail = traceback.format_exc()
         logger.error(f'Seed failed:\n{error_detail}')
@@ -558,14 +576,16 @@ def seed_data(request):
 
 @api_view(['POST'])
 def fix_checklist_required(request):
+    err = _require_admin(request)
+    if err: return err
     updated = WorkflowLevel.objects.update(checklist_required=False)
     return Response({'message': f'Reset checklist_required=False on {updated} workflow levels'})
 
 
 @api_view(['GET', 'POST'])
 def seed_metadata_schemas(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     updated, not_found = 0, []
     for code, fields in _METADATA_SCHEMAS.items():
         try:
@@ -599,16 +619,16 @@ def _run_deletion_job():
 
 @api_view(['POST'])
 def run_deletion_job(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     result = _run_deletion_job()
     return Response({'message': f'Deletion job completed. {result["deleted"]} document(s) deleted.', **result})
 
 
 @api_view(['POST'])
 def run_auto_archive_job(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     from api.management.commands.auto_archive_expired import auto_archive_run
     count, doc_numbers = auto_archive_run()
     return Response({
@@ -623,8 +643,8 @@ def run_auto_archive_job(request):
 
 @api_view(['GET'])
 def flagged_documents(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     docs = Document.objects.filter(flagged_for_deletion=True, is_deleted=False)
     return Response([
         {
@@ -699,8 +719,8 @@ def _make_csv_response(rows, filename):
 
 @api_view(['GET'])
 def deletion_logs(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
     doc_type_id = request.query_params.get('doc_type_id')
@@ -710,8 +730,8 @@ def deletion_logs(request):
 
 @api_view(['GET'])
 def deletion_logs_download(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
     doc_type_id = request.query_params.get('doc_type_id')
@@ -723,8 +743,8 @@ def deletion_logs_download(request):
 
 @api_view(['GET'])
 def creation_logs(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
     doc_type_id = request.query_params.get('doc_type_id')
@@ -734,8 +754,8 @@ def creation_logs(request):
 
 @api_view(['GET'])
 def creation_logs_download(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
     doc_type_id = request.query_params.get('doc_type_id')
@@ -747,8 +767,8 @@ def creation_logs_download(request):
 
 @api_view(['GET'])
 def logs_summary(request):
-    if not _require_admin(request):
-        return Response({'error': 'System Admin role required'}, status=403)
+    err = _require_admin(request)
+    if err: return err
     cutoff = datetime.utcnow() - timedelta(days=30)
     rows = AuditLog.objects.filter(timestamp__gte=cutoff).filter(
         Q(action__in=_DELETION_ACTIONS + _CREATION_ACTIONS) | Q(action__istartswith='New Version v')
