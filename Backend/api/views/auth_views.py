@@ -1,5 +1,6 @@
 import os, base64, hashlib, pathlib, io, time, json as _json
 from datetime import datetime, timedelta
+from django.utils import timezone as _tz
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -84,6 +85,7 @@ def auth_config(request):
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def verify_auth_code(request):
     if cfg('auth_code_enabled', 'false') != 'true':
         return Response({'gate_token': _make_gate_token()})
@@ -124,7 +126,7 @@ def login(request):
         return Response({'error': 'Account deactivated'}, status=403)
     if not user.dms_enabled:
         return Response({'error': 'DMS access is not enabled for this account. Contact your administrator.'}, status=403)
-    user.last_login = datetime.utcnow()
+    user.last_login = _tz.now()
     user.save(update_fields=['last_login'])
     return Response({
         'access_token': create_token(user.id),
@@ -137,20 +139,13 @@ def login(request):
 @authentication_classes([])
 @permission_classes([AllowAny])
 def register(request):
-    data = request.data
-    if User.objects.filter(email=data.get('email', '')).exists():
-        return Response({'error': 'Email already registered'}, status=400)
-    user = User(
-        sap_username=data.get('sap_username') or data.get('employee_id'),
-        employee_id=data.get('employee_id'),
-        name=data.get('name', ''),
-        email=data.get('email', ''),
-        department=data.get('department'),
-        role=data.get('role'),
-        hashed_password=hash_password(data['password']) if data.get('password') else None,
+    # Self-registration is disabled — all user accounts must be created by a
+    # System Admin via POST /api/admin/users. Keeping this endpoint as a stub
+    # so existing URL references do not 404, but it always rejects.
+    return Response(
+        {'error': 'Self-registration is not allowed. Contact your administrator to create an account.'},
+        status=403,
     )
-    user.save()
-    return Response(_user_to_dict(user), status=201)
 
 
 @api_view(['GET'])
@@ -235,6 +230,9 @@ def sso_callback(request):
     relay_state = request.data.get('RelayState', '')
     if not _verify_gate_token(relay_state or None):
         return Response({'error': 'Access code gate failed'}, status=403)
+    # Reject oversized payloads before parsing to prevent XML bomb / DoS
+    if len(saml_response) > 65536:
+        return Response({'error': 'SAMLResponse payload too large'}, status=413)
     try:
         xml_bytes = base64.b64decode(saml_response)
         attrs = _parse_saml_assertion(xml_bytes)
@@ -267,12 +265,17 @@ def sso_callback(request):
     # the SSO callback into a stored-XSS sink.
     raw_frontend_url = cfg('frontend_url', 'http://localhost:3000') or ''
     frontend_url = raw_frontend_url if raw_frontend_url.lower().startswith(('http://', 'https://')) else 'http://localhost:3000'
-    token_json = _json.dumps(token)
-    user_json = _json.dumps({
+    def _html_safe_json(obj):
+        # json.dumps does not escape </script>, which can break the script
+        # context if injected into an HTML page. Replace / with \/ to prevent it.
+        return _json.dumps(obj).replace('<', r'<').replace('>', r'>').replace('/', r'\/')
+
+    token_json = _html_safe_json(token)
+    user_json = _html_safe_json({
         'id': user.id, 'name': user.name, 'email': user.email,
         'role': user.role, 'is_sso_user': True,
     })
-    origin_json = _json.dumps(frontend_url)
+    origin_json = _html_safe_json(frontend_url)
     html = f"""<html><body><script>
   (function(){{
     var token={token_json};
@@ -325,7 +328,16 @@ def test_endpoint(request):
 
 
 def _parse_saml_assertion(xml_bytes):
-    import xml.etree.ElementTree as ET
+    try:
+        import defusedxml.ElementTree as ET
+    except ImportError:
+        # defusedxml not installed — fall back to stdlib but log the warning
+        import xml.etree.ElementTree as ET
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            'defusedxml not installed; SAML XML parsing uses stdlib ET which is '
+            'vulnerable to XML bomb attacks. Run: pip install defusedxml'
+        )
     NS = {
         'saml': 'urn:oasis:names:tc:SAML:2.0:assertion',
         'samlp': 'urn:oasis:names:tc:SAML:2.0:protocol',

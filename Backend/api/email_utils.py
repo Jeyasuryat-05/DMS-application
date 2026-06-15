@@ -4,6 +4,7 @@ Sends HTML emails for workflow events. All sends are fire-and-forget (errors are
 """
 import logging
 import threading
+from html import escape as _esc
 from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 
@@ -15,25 +16,32 @@ FRONTEND_URL = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
 # ─── Base HTML shell ──────────────────────────────────────────────────────────
 
 def _html(title, body_html, doc_number='', doc_title='', doc_url=''):
+    # Escape all caller-supplied strings that end up inside HTML attributes or text
+    safe_title = _esc(title or '')
+    safe_doc_number = _esc(doc_number or '')
+    safe_doc_title = _esc(doc_title or '')
+    # doc_url is always generated internally via _doc_url() — only allow http(s)
+    safe_doc_url = doc_url if (doc_url or '').lower().startswith(('http://', 'https://')) else ''
+
     action_btn = ''
-    if doc_url:
+    if safe_doc_url:
         action_btn = f'''
         <div style="text-align:center;margin:28px 0 8px;">
-          <a href="{doc_url}" style="background:#0C447C;color:#fff;padding:12px 32px;
+          <a href="{safe_doc_url}" style="background:#0C447C;color:#fff;padding:12px 32px;
              border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;
              display:inline-block;">Open Document</a>
         </div>'''
 
     doc_info = ''
-    if doc_number or doc_title:
+    if safe_doc_number or safe_doc_title:
         doc_info = f'''
         <div style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:8px;
              padding:12px 16px;margin:18px 0;font-size:13px;">
           {'<div style="color:#6b7280;font-size:11px;margin-bottom:2px;">Document Number</div>'
-           '<div style="font-weight:700;color:#0C447C;font-size:15px;">' + doc_number + '</div>'
-           if doc_number else ''}
-          {'<div style="color:#374151;margin-top:6px;">' + doc_title + '</div>'
-           if doc_title else ''}
+           '<div style="font-weight:700;color:#0C447C;font-size:15px;">' + safe_doc_number + '</div>'
+           if safe_doc_number else ''}
+          {'<div style="color:#374151;margin-top:6px;">' + safe_doc_title + '</div>'
+           if safe_doc_title else ''}
         </div>'''
 
     return f"""<!DOCTYPE html>
@@ -52,7 +60,7 @@ def _html(title, body_html, doc_number='', doc_title='', doc_url=''):
 
         <!-- Body -->
         <tr><td style="background:#fff;padding:28px 32px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
-          <div style="font-size:18px;font-weight:700;color:#111;margin-bottom:16px;">{title}</div>
+          <div style="font-size:18px;font-weight:700;color:#111;margin-bottom:16px;">{safe_title}</div>
           {doc_info}
           {body_html}
           {action_btn}
@@ -136,18 +144,21 @@ def notify_workflow_assigned(doc, level_name, assignees, initiator_name):
     if not to:
         return
 
+    s_initiator = _esc(initiator_name or '')
+    s_level = _esc(level_name or '')
+
     body = f"""
     <p style="font-size:14px;color:#374151;line-height:1.6;">
       Hello,<br><br>
-      <strong>{initiator_name}</strong> has assigned you as a reviewer for the
-      <strong>{level_name}</strong> stage of the following document.
+      <strong>{s_initiator}</strong> has assigned you as a reviewer for the
+      <strong>{s_level}</strong> stage of the following document.
       Please log in to review and take action.
     </p>
     <table style="font-size:13px;color:#374151;width:100%;margin:12px 0;">
       <tr><td style="padding:4px 0;color:#6b7280;width:130px;">Stage:</td>
-          <td><strong>{level_name}</strong></td></tr>
+          <td><strong>{s_level}</strong></td></tr>
       <tr><td style="padding:4px 0;color:#6b7280;">Initiated by:</td>
-          <td>{initiator_name}</td></tr>
+          <td>{s_initiator}</td></tr>
     </table>
     <p style="font-size:12px;color:#6b7280;">
       Action required: review the document and <strong>Approve</strong> or <strong>Reject</strong>.
@@ -173,17 +184,20 @@ def notify_approved(doc, approved_by_name, next_level_name, next_assignees):
     if not to:
         return
 
+    s_approved_by = _esc(approved_by_name or '')
+    s_next_level = _esc(next_level_name or '')
+
     body = f"""
     <p style="font-size:14px;color:#374151;line-height:1.6;">
       Hello,<br><br>
-      The <strong>{next_level_name}</strong> stage of the document below is now ready for your review.
-      The previous stage was approved by <strong>{approved_by_name}</strong>.
+      The <strong>{s_next_level}</strong> stage of the document below is now ready for your review.
+      The previous stage was approved by <strong>{s_approved_by}</strong>.
     </p>
     <table style="font-size:13px;color:#374151;width:100%;margin:12px 0;">
       <tr><td style="padding:4px 0;color:#6b7280;width:130px;">Your Stage:</td>
-          <td><strong>{next_level_name}</strong></td></tr>
+          <td><strong>{s_next_level}</strong></td></tr>
       <tr><td style="padding:4px 0;color:#6b7280;">Approved by:</td>
-          <td>{approved_by_name}</td></tr>
+          <td>{s_approved_by}</td></tr>
     </table>"""
 
     html = _html(
@@ -204,6 +218,8 @@ def notify_released(doc, released_by_name, creator):
     if not to:
         return
 
+    s_released_by = _esc(released_by_name or '')
+
     body = f"""
     <p style="font-size:14px;color:#374151;line-height:1.6;">
       Congratulations! Your document has successfully completed the approval workflow
@@ -211,7 +227,7 @@ def notify_released(doc, released_by_name, creator):
     </p>
     <table style="font-size:13px;color:#374151;width:100%;margin:12px 0;">
       <tr><td style="padding:4px 0;color:#6b7280;width:130px;">Released by:</td>
-          <td>{released_by_name}</td></tr>
+          <td>{s_released_by}</td></tr>
       <tr><td style="padding:4px 0;color:#6b7280;">Status:</td>
           <td><strong style="color:#0F6E56;">Released</strong></td></tr>
     </table>"""
@@ -234,21 +250,25 @@ def notify_rejected(doc, rejected_by_name, level_name, note, creator):
     if not to:
         return
 
+    s_rejected_by = _esc(rejected_by_name or '')
+    s_level = _esc(level_name or '')
+    s_note = _esc(note or '')
+
     note_row = f"""
     <tr><td style="padding:4px 0;color:#6b7280;vertical-align:top;width:130px;">Reason:</td>
-        <td style="color:#A32D2D;">{note or 'No reason provided'}</td></tr>""" if note else ''
+        <td style="color:#A32D2D;">{s_note or 'No reason provided'}</td></tr>""" if note else ''
 
     body = f"""
     <p style="font-size:14px;color:#374151;line-height:1.6;">
       Your document has been <strong style="color:#A32D2D;">Rejected</strong> at the
-      <strong>{level_name}</strong> stage. It has been returned to <strong>Draft</strong> status.
+      <strong>{s_level}</strong> stage. It has been returned to <strong>Draft</strong> status.
       Please review the feedback, make the necessary corrections, and re-initiate the workflow.
     </p>
     <table style="font-size:13px;color:#374151;width:100%;margin:12px 0;">
       <tr><td style="padding:4px 0;color:#6b7280;width:130px;">Rejected by:</td>
-          <td>{rejected_by_name}</td></tr>
+          <td>{s_rejected_by}</td></tr>
       <tr><td style="padding:4px 0;color:#6b7280;">Stage:</td>
-          <td>{level_name}</td></tr>
+          <td>{s_level}</td></tr>
       {note_row}
     </table>"""
 
@@ -270,16 +290,19 @@ def notify_returned(doc, returned_by_name, note, creator):
     if not to:
         return
 
+    s_returned_by = _esc(returned_by_name or '')
+    s_note = _esc(note or '')
+
     body = f"""
     <p style="font-size:14px;color:#374151;line-height:1.6;">
       Your document has been <strong>returned for correction</strong> by
-      <strong>{returned_by_name}</strong>. It is now back in <strong>Draft</strong> status.
+      <strong>{s_returned_by}</strong>. It is now back in <strong>Draft</strong> status.
       Please review the comments, make the necessary corrections, and re-initiate the workflow.
     </p>
     <table style="font-size:13px;color:#374151;width:100%;margin:12px 0;">
       <tr><td style="padding:4px 0;color:#6b7280;width:130px;">Returned by:</td>
-          <td>{returned_by_name}</td></tr>
-      {'<tr><td style="padding:4px 0;color:#6b7280;vertical-align:top;">Note:</td><td>' + note + '</td></tr>' if note else ''}
+          <td>{s_returned_by}</td></tr>
+      {'<tr><td style="padding:4px 0;color:#6b7280;vertical-align:top;">Note:</td><td>' + s_note + '</td></tr>' if note else ''}
     </table>"""
 
     html = _html(
@@ -300,13 +323,16 @@ def notify_feedback_requested(doc, requester_name, comment, tagged_user):
     if not to:
         return
 
+    s_requester = _esc(requester_name or '')
+    s_comment = _esc(comment or '')
+
     body = f"""
     <p style="font-size:14px;color:#374151;line-height:1.6;">
-      <strong>{requester_name}</strong> has requested your feedback on the following document.
+      <strong>{s_requester}</strong> has requested your feedback on the following document.
     </p>
     <div style="background:#f8fafc;border-left:4px solid #185FA5;padding:12px 16px;
          border-radius:0 8px 8px 0;margin:16px 0;font-size:13px;color:#374151;font-style:italic;">
-      "{comment}"
+      &#8220;{s_comment}&#8221;
     </div>
     <p style="font-size:12px;color:#6b7280;">
       Please open the document and add your feedback in the Feedback tab.
@@ -330,13 +356,16 @@ def notify_feedback_added(doc, commenter_name, comment, creator):
     if not to:
         return
 
+    s_commenter = _esc(commenter_name or '')
+    s_comment = _esc(comment or '')
+
     body = f"""
     <p style="font-size:14px;color:#374151;line-height:1.6;">
-      <strong>{commenter_name}</strong> has added a feedback comment on your document.
+      <strong>{s_commenter}</strong> has added a feedback comment on your document.
     </p>
     <div style="background:#f8fafc;border-left:4px solid #7F77DD;padding:12px 16px;
          border-radius:0 8px 8px 0;margin:16px 0;font-size:13px;color:#374151;font-style:italic;">
-      "{comment}"
+      &#8220;{s_comment}&#8221;
     </div>"""
 
     html = _html(

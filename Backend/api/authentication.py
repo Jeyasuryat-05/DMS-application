@@ -14,7 +14,7 @@ if not SECRET_KEY:
         "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
     )
 ALGORITHM = 'HS256'
-TOKEN_MINS = 480  # 8 hours
+TOKEN_MINS = int(os.environ.get('JWT_EXPIRY_MINUTES', '480'))  # default 8 h (one full workday)
 
 
 def hash_password(password: str) -> str:
@@ -54,22 +54,15 @@ def set_cfg(key: str, value: str):
 
 
 class JWTAuthentication(BaseAuthentication):
-    # Endpoints that may receive the JWT via ?token= query string.
-    # Required because <iframe>/<video>/<img> tags can't attach Authorization
-    # headers, but the security trade-off is JWTs leaking into server logs and
-    # referers — so allow it ONLY for these read-only file endpoints.
-    _QUERY_TOKEN_PATH_FRAGMENTS = ('/files/', '/uploads/')
-
     def authenticate(self, request):
         from api.models import User
         token = None
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:].strip()
-        if not token:
-            path = request.path or ''
-            if any(frag in path for frag in self._QUERY_TOKEN_PATH_FRAGMENTS):
-                token = request.GET.get('token') or request.query_params.get('token', '')
+        # Main session JWT is NEVER accepted via query string — it leaks to
+        # server logs and HTTP Referer headers. File viewing uses short-lived
+        # file-view tokens via create_file_view_token() instead.
         if not token:
             return None
         try:
@@ -153,3 +146,38 @@ def require_delete(view_func):
         ok, resp = _flag_check(request.user, 'can_delete', 'Delete')
         return resp if not ok else view_func(request, *args, **kwargs)
     return wrapped
+
+
+# ─── Short-lived file-view tokens ────────────────────────────────────────────
+# Used instead of passing the main session JWT in query strings (?token=...).
+# These tokens embed the specific file_id they grant access to and expire in
+# 5 minutes, limiting the damage if a token leaks into server logs.
+
+FILE_VIEW_TOKEN_MINS = 5
+
+
+def create_file_view_token(user_id: int, doc_id: int, file_id: int) -> str:
+    payload = {
+        'sub':     str(user_id),
+        'fv_doc':  doc_id,
+        'fv_file': file_id,
+        'exp':     datetime.utcnow() + timedelta(minutes=FILE_VIEW_TOKEN_MINS),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_file_view_token(token: str, doc_id: int, file_id: int):
+    """
+    Decode and validate a file-view token.
+    Returns the user_id (int) on success, raises AuthenticationFailed otherwise.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise AuthenticationFailed('File view token is invalid or expired.')
+    if payload.get('fv_doc') != doc_id or payload.get('fv_file') != file_id:
+        raise AuthenticationFailed('File view token does not match the requested file.')
+    user_id = payload.get('sub')
+    if not user_id:
+        raise AuthenticationFailed('File view token missing subject.')
+    return int(user_id)

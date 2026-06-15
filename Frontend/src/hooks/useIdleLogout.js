@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useAuth } from './useAuth'
+import { setIdleTimedOut } from './idleFlag'
 
 const IDLE_MS   = 3 * 60 * 1000  // 3 minutes total idle time
 const WARN_MS   = 30 * 1000      // show warning 30 s before logout
@@ -9,29 +9,28 @@ const EVENTS = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'cl
 
 export function useIdleLogout() {
   const { logout } = useAuth()
-  const navigate   = useNavigate()
   const logoutRef  = useRef(null)
   const warnRef    = useRef(null)
   const [warning, setWarning]     = useState(false)
+  const [timedOut, setTimedOut]   = useState(false)
   const [countdown, setCountdown] = useState(WARN_MS / 1000)
   const countRef   = useRef(null)
 
   const doLogout = useCallback(() => {
     clearInterval(countRef.current)
     setWarning(false)
-    logout()
-    navigate('/login', { replace: true })
-  }, [logout, navigate])
+    setIdleTimedOut(true)
+    logout()          // clear token/user from context + localStorage
+    setTimedOut(true) // show re-login modal instead of navigating away
+  }, [logout])
 
   const reset = useCallback(() => {
-    // Cancel any pending timers
     clearTimeout(logoutRef.current)
     clearTimeout(warnRef.current)
     clearInterval(countRef.current)
     setWarning(false)
     setCountdown(WARN_MS / 1000)
 
-    // Schedule warning, then logout
     warnRef.current  = setTimeout(() => {
       setWarning(true)
       setCountdown(WARN_MS / 1000)
@@ -46,6 +45,13 @@ export function useIdleLogout() {
     logoutRef.current = setTimeout(doLogout, IDLE_MS)
   }, [doLogout])
 
+  // Called after successful re-login to resume the session
+  const resumeSession = useCallback(() => {
+    setIdleTimedOut(false)
+    setTimedOut(false)
+    reset()
+  }, [reset])
+
   useEffect(() => {
     reset()
     EVENTS.forEach(e => window.addEventListener(e, reset, { passive: true }))
@@ -57,5 +63,5 @@ export function useIdleLogout() {
     }
   }, [reset])
 
-  return { warning, countdown, stayLoggedIn: reset }
+  return { warning, countdown, timedOut, stayLoggedIn: reset, resumeSession }
 }

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { documentsAPI, adminAPI } from '../api'
+import { documentsAPI, adminAPI, libraryAPI } from '../api'
 import { Modal, Input, Select, Btn, SearchableSelect } from './ui'
 import { useAuth } from '../hooks/useAuth'
 
@@ -7,14 +7,15 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
   const { user } = useAuth()
   const isAdmin = user?.role === 'System Admin' || user?.role === 'Sub-Admin'
 
-  const [docTypes, setDocTypes]   = useState([])
-  const [selDocType, setSelDocType] = useState(null)  // full doc type object
+  const [docTypes, setDocTypes]           = useState([])
+  const [permittedDocTypeIds, setPermittedDocTypeIds] = useState(null) // null = not loaded yet
+  const [selDocType, setSelDocType]       = useState(null)
   const [form, setForm] = useState({
     title: '', doc_type_id: preselectedDocTypeId ? String(preselectedDocTypeId) : '', confidential: false,
     change_reason: 'Initial upload',
   })
-  const [customMeta, setCustomMeta] = useState({})   // key → value for dynamic fields
-  const [hierSel, setHierSel]       = useState({})   // key → selected parent (for hierarchical)
+  const [customMeta, setCustomMeta] = useState({})
+  const [hierSel, setHierSel]       = useState({})
   const [files, setFiles]     = useState([])
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -22,12 +23,28 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
   const [pdfPageCount, setPdfPageCount] = useState(null)
 
   // On-behalf-of
-  const [onBehalfOf, setOnBehalfOf]   = useState(null)   // selected user object
+  const [onBehalfOf, setOnBehalfOf]   = useState(null)
   const [userSearch, setUserSearch]   = useState('')
   const [userResults, setUserResults] = useState([])
   const [userSearching, setUserSearching] = useState(false)
 
-  useEffect(() => { adminAPI.listDocTypes().then(r => setDocTypes(r.data)) }, [])
+  useEffect(() => {
+    adminAPI.listDocTypes().then(r => setDocTypes(r.data)).catch(() => {})
+    // Load permitted doc types unless opened from a folder (preselected = already authorized)
+    if (!preselectedDocTypeId) {
+      libraryAPI.myUploadDocTypes()
+        .then(r => {
+          if (r.data.unrestricted) {
+            setPermittedDocTypeIds(null) // admin — no filter
+          } else {
+            setPermittedDocTypeIds(new Set(r.data.doc_type_ids.map(String)))
+          }
+        })
+        .catch(() => setPermittedDocTypeIds(null)) // on error, don't block
+    } else {
+      setPermittedDocTypeIds(null) // preselected from folder = already authorized
+    }
+  }, [preselectedDocTypeId])
 
   useEffect(() => {
     if (!userSearch.trim() || userSearch.length < 2) { setUserResults([]); return }
@@ -169,7 +186,9 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
     } finally { setLoading(false) }
   }
 
-  const dtOptions = docTypes.map(d => ({ value: d.id, label: `${d.code} — ${d.name}` }))
+  const dtOptions = docTypes
+    .filter(d => !permittedDocTypeIds || permittedDocTypeIds.has(String(d.id)))
+    .map(d => ({ value: d.id, label: `${d.code} — ${d.name}` }))
 
   // ── Dynamic field renderer ────────────────────────────────────────────────────
   function renderField(field) {
@@ -179,7 +198,10 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
     const iS   = { width:'100%', boxSizing:'border-box', fontSize:13, padding:'7px 10px',
                    borderRadius:7, border:'1px solid #d1d5db' }
 
-    switch (field.type) {
+    // Any field with options always renders as a searchable dropdown regardless of type tag
+    const effType = (field.options && field.options.length > 0) ? 'dropdown' : (field.type || 'text')
+
+    switch (effType) {
       case 'numeric':
       case 'char': {
         const isNumeric = field.type === 'numeric'
@@ -397,7 +419,7 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
         return (
           <div key={field.key}>
             <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>{lbl}</label>
-            <input value={val} onChange={e => setMeta(field.key, e.target.value)} style={iS} />
+            <input value={val} onChange={e => setMeta(field.key, e.target.value)} style={iS} placeholder={field.placeholder || ''} />
           </div>
         )
     }
@@ -408,9 +430,37 @@ export default function UploadModal({ onClose, onSuccess, preselectedDocTypeId }
       <form onSubmit={handleSubmit}>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 16px' }}>
 
-          {/* Fixed fields */}
-          <Select label="Document Type" required value={form.doc_type_id}
-            onChange={v => set('doc_type_id', v)} options={dtOptions} />
+          {/* Document Type — locked when opened from a folder doc-type card */}
+          {preselectedDocTypeId ? (
+            <div>
+              <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>
+                Document Type <span style={{ color:'#ef4444' }}>*</span>
+              </label>
+              <div style={{
+                padding:'7px 12px', borderRadius:7, border:'1px solid #d1d5db',
+                background:'#f3f4f6', fontSize:13, color:'#374151',
+                display:'flex', alignItems:'center', justifyContent:'space-between',
+              }}>
+                <span>{selDocType ? `${selDocType.code} — ${selDocType.name}` : '…'}</span>
+                <span style={{ fontSize:10, color:'#9ca3af', background:'#e5e7eb',
+                  borderRadius:99, padding:'1px 7px', fontWeight:600 }}>LOCKED</span>
+              </div>
+            </div>
+          ) : dtOptions.length === 0 && permittedDocTypeIds !== null ? (
+            <div style={{ gridColumn:'1 / -1' }}>
+              <label style={{ fontSize:11, color:'#6b7280', display:'block', marginBottom:3 }}>
+                Document Type <span style={{ color:'#ef4444' }}>*</span>
+              </label>
+              <div style={{ padding:'10px 14px', borderRadius:8, border:'1px solid #fca5a5',
+                background:'#fef2f2', fontSize:13, color:'#a32d2d' }}>
+                You don't have upload permission for any document type.
+                Go to the <strong>Document Library</strong> and request folder access first.
+              </div>
+            </div>
+          ) : (
+            <Select label="Document Type" required value={form.doc_type_id}
+              onChange={v => set('doc_type_id', v)} options={dtOptions} />
+          )}
 
           {/* Serial Number — system generated, shown as info */}
           {form.doc_type_id && (

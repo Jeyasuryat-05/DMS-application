@@ -163,17 +163,19 @@ class DocumentType(models.Model):
 
 
 class UserFolder(models.Model):
-    """A library folder. Owned by a user (private) or NULL (admin template, visible to all)."""
-    name        = models.CharField(max_length=200)
-    description = models.TextField(blank=True, default='')
-    owner       = models.ForeignKey('User', null=True, blank=True, on_delete=models.CASCADE,
-                                    related_name='library_folders', db_column='owner_id')
-    parent      = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE,
-                                    related_name='children', db_column='parent_id')
-    doc_types   = models.ManyToManyField(DocumentType, blank=True, related_name='pinned_in_folders',
-                                         through='UserFolderDocType')
-    is_active   = models.BooleanField(default=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
+    """A library folder. Owned by a user (private) or NULL (admin template, permission-controlled)."""
+    name             = models.CharField(max_length=200)
+    description      = models.TextField(blank=True, default='')
+    owner            = models.ForeignKey('User', null=True, blank=True, on_delete=models.CASCADE,
+                                         related_name='library_folders', db_column='owner_id')
+    folder_manager   = models.ForeignKey('User', null=True, blank=True, on_delete=models.SET_NULL,
+                                         related_name='managed_folders', db_column='folder_manager_id')
+    parent           = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE,
+                                         related_name='children', db_column='parent_id')
+    doc_types        = models.ManyToManyField(DocumentType, blank=True, related_name='pinned_in_folders',
+                                              through='UserFolderDocType')
+    is_active        = models.BooleanField(default=True)
+    created_at       = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'user_folders'
@@ -460,6 +462,41 @@ class CoverPageTemplate(models.Model):
 
     class Meta:
         db_table = 'cover_page_templates'
+
+
+class FolderPermission(models.Model):
+    """Explicit VIEW or UPLOAD access granted to a user for a folder."""
+    PERM_CHOICES = [('VIEW', 'View'), ('UPLOAD', 'Upload')]
+    folder     = models.ForeignKey(UserFolder, on_delete=models.CASCADE, related_name='permissions')
+    user       = models.ForeignKey(User, on_delete=models.CASCADE, related_name='folder_permissions')
+    permission = models.CharField(max_length=10, choices=PERM_CHOICES)
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='permissions_granted', db_column='granted_by_id')
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'folder_permissions'
+        unique_together = (('folder', 'user'),)
+
+
+class FolderAccessRequest(models.Model):
+    """A user requests VIEW or UPLOAD access to a folder; folder manager approves or rejects."""
+    STATUS_CHOICES = [('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected')]
+    PERM_CHOICES   = [('VIEW', 'View'), ('UPLOAD', 'Upload')]
+    folder      = models.ForeignKey(UserFolder, on_delete=models.CASCADE, related_name='access_requests')
+    requester   = models.ForeignKey(User, on_delete=models.CASCADE, related_name='folder_access_requests')
+    permission  = models.CharField(max_length=10, choices=PERM_CHOICES)
+    reason      = models.TextField(blank=True, default='')
+    status      = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='access_requests_reviewed', db_column='reviewed_by_id')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(null=True, blank=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'folder_access_requests'
+        ordering = ['-created_at']
 
 
 class ApproverConfig(models.Model):

@@ -277,10 +277,13 @@ def document_types(request):
         # Structure folders (org / department containers) live under the Library,
         # not under the doc-types catalogue.
         include_structure = request.query_params.get('include_structure') == 'true'
-        dts = DocumentType.objects.all()
+        dts = DocumentType.objects.all().order_by('code')
         if not include_structure:
             dts = dts.filter(is_structure_folder=False)
-        return Response([_dt_to_dict(dt) for dt in dts])
+        resp = Response([_dt_to_dict(dt) for dt in dts])
+        resp['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        resp['Pragma'] = 'no-cache'
+        return resp
 
     err = _require_admin(request)
     if err: return err
@@ -398,51 +401,48 @@ def number_reservations(request):
 # ─── Master document types ────────────────────────────────────────────────────
 
 MASTER_DOC_TYPES = [
-    {'name': 'Addendum',                                     'code': 'ADDM', 'auth_required': False, 'auth_code': ''},
-    {'name': 'AERB',                                         'code': 'AERB', 'auth_required': False, 'auth_code': ''},
-    {'name': 'As Built Drawing',                             'code': 'ABD',  'auth_required': False, 'auth_code': ''},
-    {'name': 'CDC',                                          'code': 'CDC',  'auth_required': False, 'auth_code': ''},
-    {'name': 'DCN',                                          'code': 'DCN',  'auth_required': False, 'auth_code': ''},
-    {'name': 'DCQ',                                          'code': 'DCQ',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Design Concession Request-DCR',                'code': 'DCR',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Digital I&C System',                           'code': 'DICS', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Directorate Procedures',                       'code': 'DPROC','auth_required': False, 'auth_code': ''},
-    {'name': 'Document',                                     'code': 'DOC',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Drawing',                                      'code': 'DRW',  'auth_required': True,  'auth_code': 'A1111'},
-    {'name': 'ECN',                                          'code': 'ECN',  'auth_required': True,  'auth_code': 'A1234'},
-    {'name': 'ESSG',                                         'code': 'ESSG', 'auth_required': False, 'auth_code': ''},
-    {'name': 'FCN',                                          'code': 'FCN',  'auth_required': True,  'auth_code': ''},
-    {'name': 'Feedback',                                     'code': 'FBK',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Field Change Proposal or Field Change Request', 'code': 'FCR', 'auth_required': False, 'auth_code': ''},
-    {'name': 'General',                                      'code': 'GEN',  'auth_required': False, 'auth_code': ''},
-    {'name': 'HSE',                                          'code': 'HSE',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Indent-EB',                                    'code': 'INDEB','auth_required': False, 'auth_code': ''},
-    {'name': 'Inspection Quality Plan',                      'code': 'IQP',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Inspection Testing of Equipment',              'code': 'ITE',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Knowledge Management',                         'code': 'KM',   'auth_required': False, 'auth_code': ''},
-    {'name': 'Letter of Transmittal',                        'code': 'LOT',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Letter of Transmittal FI',                     'code': 'LOTFI','auth_required': False, 'auth_code': ''},
-    {'name': 'Letter of Transmittal KAIGA5&6',               'code': 'LOTK', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Letter of Transmittal MBRAPP1TO4',             'code': 'LOTM', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Non-Conformance Report',                       'code': 'NCR',  'auth_required': False, 'auth_code': ''},
-    {'name': 'PHWR Project Document',                        'code': 'PHWR', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Print Request for Drawing',                    'code': 'PRD',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Procurement',                                  'code': 'PROC', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Purchase Orders',                              'code': 'PO',   'auth_required': False, 'auth_code': ''},
-    {'name': 'QA Document',                                  'code': 'QAD',  'auth_required': False, 'auth_code': ''},
-    {'name': 'QS Requisition',                               'code': 'QSR',  'auth_required': False, 'auth_code': ''},
-    {'name': 'R&DES',                                        'code': 'RDES', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Requisition',                                  'code': 'REQ',  'auth_required': False, 'auth_code': ''},
-    {'name': 'RSA',                                          'code': 'RSA',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Safety Related Deficiency',                    'code': 'SRD',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Site Documents',                               'code': 'SITE', 'auth_required': False, 'auth_code': ''},
-    {'name': 'SQA',                                          'code': 'SQA',  'auth_required': False, 'auth_code': ''},
-    {'name': 'Technical',                                    'code': 'TECH', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Technical Authorization',                      'code': 'TA',   'auth_required': False, 'auth_code': ''},
-    {'name': 'Technical Specification',                      'code': 'TSPEC','auth_required': False, 'auth_code': ''},
-    {'name': 'TEMPLATEHOLDER',                               'code': 'TMPL', 'auth_required': False, 'auth_code': ''},
-    {'name': 'Vendor Evaluation',                            'code': 'VE',   'auth_required': False, 'auth_code': ''},
-    {'name': 'Work Authorization',                           'code': 'WA',   'auth_required': False, 'auth_code': ''},
+    {'name': 'Addendum',                                      'code': 'ZAD', 'auth_required': False, 'auth_code': ''},
+    {'name': 'AERB',                                          'code': 'AER', 'auth_required': False, 'auth_code': ''},
+    {'name': 'As Built Drawing',                              'code': 'ZBD', 'auth_required': False, 'auth_code': ''},
+    {'name': 'CDC',                                           'code': 'CDC', 'auth_required': False, 'auth_code': ''},
+    {'name': 'DCN',                                           'code': 'DCN', 'auth_required': False, 'auth_code': ''},
+    {'name': 'DCQ',                                           'code': 'DCQ', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Design Concession Request-DCR',                 'code': 'DCR', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Digital I&C System',                            'code': 'ZIC', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Directorate Procedures',                        'code': 'ZDP', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Document',                                      'code': 'ZDO', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Drawing',                                       'code': 'DRW', 'auth_required': True,  'auth_code': 'A1111'},
+    {'name': 'ECN',                                           'code': 'ECN', 'auth_required': True,  'auth_code': 'A1234'},
+    {'name': 'ESSG',                                          'code': 'ZES', 'auth_required': False, 'auth_code': ''},
+    {'name': 'FCN',                                           'code': 'FCN', 'auth_required': True,  'auth_code': ''},
+    {'name': 'Feedback',                                      'code': 'ZFB', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Field Change Proposal or Field Change Request',  'code': 'FCR', 'auth_required': False, 'auth_code': ''},
+    {'name': 'General',                                       'code': 'GEN', 'auth_required': False, 'auth_code': ''},
+    {'name': 'HSE',                                           'code': 'HSE', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Indent-EB',                                     'code': 'IEB', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Inspection Quality Plan',                       'code': 'IQP', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Inspection Testing of Equipment',               'code': 'ITE', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Knowledge Management',                          'code': 'ZKM', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Letter of Transmittal',                         'code': 'LOT', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Non-Conformance Report',                        'code': 'NCR', 'auth_required': False, 'auth_code': ''},
+    {'name': 'PHWR Project Document',                         'code': 'PPD', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Print Request for Drawing',                     'code': 'PRD', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Procurement',                                   'code': 'PRO', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Purchase Orders',                               'code': 'ZPO', 'auth_required': False, 'auth_code': ''},
+    {'name': 'QA Document',                                   'code': 'QAD', 'auth_required': False, 'auth_code': ''},
+    {'name': 'QS Requisition',                                'code': 'QSR', 'auth_required': False, 'auth_code': ''},
+    {'name': 'R&DES',                                         'code': 'R&D', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Requisition',                                   'code': 'REQ', 'auth_required': False, 'auth_code': ''},
+    {'name': 'RSA',                                           'code': 'RSA', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Safety Related Deficiency',                     'code': 'SRD', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Site Documents',                                'code': 'ZSD', 'auth_required': False, 'auth_code': ''},
+    {'name': 'SQA',                                           'code': 'SQA', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Technical',                                     'code': 'ZTE', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Technical Authorization',                       'code': 'ZTA', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Technical Specification',                       'code': 'ZTS', 'auth_required': False, 'auth_code': ''},
+    {'name': 'TEMPLATEHOLDER',                                'code': 'TEM', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Vendor Evaluation',                             'code': 'ZVE', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Work Authorization',                            'code': 'ZWA', 'auth_required': False, 'auth_code': ''},
 ]
 
 FMT_MAP = {
@@ -453,7 +453,7 @@ FMT_MAP = {
         {'extension': 'tiff', 'label': 'TIFF Image',      'icon': '', 'mime_type': 'image/tiff'},
         {'extension': 'dgn',  'label': 'MicroStation',    'icon': '', 'mime_type': 'application/octet-stream'},
     ],
-    'ABD': [
+    'ZBD': [
         {'extension': 'dwg', 'label': 'AutoCAD Drawing', 'icon': '', 'mime_type': 'image/vnd.dwg'},
         {'extension': 'pdf', 'label': 'PDF Document',    'icon': '', 'mime_type': 'application/pdf'},
     ],
@@ -465,6 +465,47 @@ FMT_MAP = {
         {'extension': 'zip',  'label': 'ZIP Archive',       'icon': '', 'mime_type': 'application/zip'},
     ],
 }
+
+def _wf(*names):
+    stages = ['Prepare', 'Check', 'Review', 'Approve', 'Concur',
+              'Design Check', 'Drawing Check', 'Drawing Review',
+              'Design Review', 'IndReview', 'Drawn', 'Designed',
+              'Prepared', 'Concurred with Design', 'Concurred with DC&CW Group',
+              'Approve by ED', 'Review by ED']
+    steps = []
+    for i, n in enumerate(names, 1):
+        stage = n if n in stages else 'Prepare' if i == 1 else 'Check' if i == 2 else 'Review' if i == len(names) - 1 else 'Approve'
+        steps.append({'step': i, 'name': n, 'stage': n, 'checklist_required': False})
+    return steps
+
+WORKFLOW_MAP = {
+    # As Built Drawing — 5 step
+    'ZBD': _wf('Prepared', 'Design Check', 'Concur with Design', 'Review', 'Approve'),
+    # Drawing — 6 step inhouse default
+    'DRW': _wf('Drawn', 'Drawing Check', 'Designed', 'Design Check', 'Review', 'Approve'),
+    # DCN — 6 step
+    'DCN': _wf('Prepared', 'Design Check', 'Concurred with DC&CW Group', 'Concurred with Design', 'Review', 'Approve'),
+    # ECN — 6 step
+    'ECN': _wf('Drawn', 'Design', 'Checked', 'Reviewed', 'IndReview', 'Approve'),
+    # FCN — 7 step
+    'FCN': _wf('Prepared', 'Drawing Check', 'Drawing Review', 'Design Check', 'Design Review', 'Concurred with Design', 'Approve'),
+    # CDC — 3 step
+    'CDC': _wf('Prepare', 'Check', 'Approve'),
+    # Technical Authorization — 3 step
+    'ZTA': _wf('Prepare', 'Review', 'Approve by ED'),
+    # Site Documents — 3 step default
+    'ZSD': _wf('Prepare', 'Check', 'Approve'),
+    # QSR — 2 step (one step bulk)
+    'QSR': _wf('Prepare', 'Approve'),
+    # ZTE Technical — 4 step
+    'ZTE': _wf('Prepare', 'Check', 'Review', 'Approve'),
+    # ZTS Technical Specification — 4 step
+    'ZTS': _wf('Prepare', 'Check', 'Review', 'Approve'),
+    # HSE — 3 step
+    'HSE': _wf('Prepare', 'Check', 'Approve'),
+    # Common/General/default — 4 step
+}
+_DEFAULT_WF = _wf('Prepare', 'Check', 'Review', 'Approve')
 
 _METADATA_SCHEMAS = {}
 try:
@@ -527,7 +568,10 @@ def seed_data(request):
                     doc_type_id=dt.id, enabled=True, lead_days='30,15,7',
                     notify_author=True, notify_roles='',
                 )
-                WorkflowConfig.objects.create(doc_type_id=dt.id)
+                WorkflowConfig.objects.create(
+                    doc_type_id=dt.id,
+                    levels=WORKFLOW_MAP.get(dt_data['code'], _DEFAULT_WF),
+                )
 
             import secrets as _secrets
             admin_created = False

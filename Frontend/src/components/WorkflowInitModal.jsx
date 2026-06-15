@@ -406,7 +406,6 @@ export default function WorkflowInitModal({
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState('')
   const [obsoleteReason, setObsoleteReason] = useState('')
-  const [password, setPassword] = useState('')
 
   function changeMode(nextMode) {
     if (nextMode === mode) return
@@ -459,10 +458,6 @@ export default function WorkflowInitModal({
       setError('Obsolete reason is mandatory for an archive workflow.')
       return
     }
-    if (!password) {
-      setError('Enter your password to authenticate the workflow initiation.')
-      return
-    }
     // Need at least one approver step beyond the initiator
     if (levels.length < 2) {
       setError('Add at least one approval level after Prepare.')
@@ -484,7 +479,6 @@ export default function WorkflowInitModal({
       const payload = {
         mode,
         purpose,
-        password,
         obsolete_reason: isArchive ? obsoleteReason.trim() : undefined,
         levels: levels.map(lv => ({
           step: lv.step,
@@ -734,33 +728,6 @@ export default function WorkflowInitModal({
             </button>
           )}
 
-          {/* Password authentication — required to initiate */}
-          <div style={{
-            marginTop:18, padding:'12px 14px', borderRadius:10,
-            background:'#f8fafc', border:`1px solid ${C.border}`,
-          }}>
-            <div style={{ fontSize:12, fontWeight:600, color:'#374151', marginBottom:6,
-              display:'flex', alignItems:'center', gap:6 }}>
-              <span>🔐</span>
-              Authenticate to {isArchive ? 'request archive' : 'initiate workflow'} <span style={{ color:'#A32D2D' }}>*</span>
-            </div>
-            <div style={{ fontSize:11, color:'#6b7280', marginBottom:8 }}>
-              Enter your login password as a digital signature. This is logged in the audit trail.
-            </div>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              autoComplete="current-password"
-              placeholder="Your password"
-              style={{
-                width:'100%', boxSizing:'border-box', padding:'8px 10px',
-                fontSize:13, border:`1px solid ${password ? C.border : '#fca5a5'}`,
-                borderRadius:8, fontFamily:'inherit',
-              }}
-            />
-          </div>
-
           {error && (
             <div style={{
               background:'#FCEBEB', color:C.red, borderRadius:8,
@@ -794,11 +761,11 @@ export default function WorkflowInitModal({
             </button>
             <button
               onClick={submit}
-              disabled={loading || !allFilled || !password}
+              disabled={loading || !allFilled}
               style={{
                 padding:'8px 24px', borderRadius:8, border:'none',
-                background: (loading || !allFilled || !password) ? '#9ca3af' : C.blue,
-                color:'#fff', cursor: (loading || !allFilled || !password) ? 'not-allowed':'pointer',
+                background: (loading || !allFilled) ? '#9ca3af' : C.blue,
+                color:'#fff', cursor: (loading || !allFilled) ? 'not-allowed':'pointer',
                 fontSize:13, fontWeight:600, fontFamily:'inherit',
               }}
             >

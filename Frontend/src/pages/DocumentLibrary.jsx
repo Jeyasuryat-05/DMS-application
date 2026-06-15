@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { libraryAPI, adminAPI } from '../api'
 import UploadModal from '../components/UploadModal'
 import { fmtDate } from '../utils/dates'
-import { Title, Text, Button, FlexBox } from '@ui5/webcomponents-react'
-
-/* ─── Palette — uses SAP tokens where possible ─────────────── */
-const BLUE   = 'var(--sapBrandColor)'
-const BG     = 'var(--sapBackgroundColor)'
-const WHITE  = 'var(--sapList_Background)'
-const BORDER = 'var(--sapList_BorderColor)'
+import RequestAccessModal from '../components/RequestAccessModal'
+import AccessInboxModal from '../components/AccessInboxModal'
+/* ─── Palette ───────────────────────────────────────────────── */
+const BLUE   = '#0070F2'
+const BG     = '#F5F6F7'
+const WHITE  = '#FFFFFF'
+const BORDER = '#D9D9D9'
 
 /* ─── Tiny helpers ────────────────────────────────────────── */
 function Badge({ label, color = '#64748b' }) {
@@ -95,11 +95,14 @@ function groupDocs(docs, groupBy) {
 }
 
 /* ─── Folder Tree Node ────────────────────────────────────── */
-function FolderNode({ node, depth, selectedId, onSelect, onAddChild, onDelete, onMove, onTogglePublish, canEdit, isAdmin }) {
+function FolderNode({ node, depth, selectedId, onSelect, onAddChild, onDelete, onMove, onTogglePublish, onRequestAccess, canEdit, isAdmin }) {
   const [open, setOpen] = useState(depth === 0)
   const hasChildren = (node.children || []).length > 0
   const isSelected = selectedId === node.id
   const [menuOpen, setMenuOpen] = useState(false)
+  const locked = node.is_template && !node.user_permission && !isAdmin
+
+  const permColor = node.user_permission === 'UPLOAD' ? '#10b981' : node.user_permission === 'VIEW' ? '#3b82f6' : null
 
   return (
     <div>
@@ -108,10 +111,11 @@ function FolderNode({ node, depth, selectedId, onSelect, onAddChild, onDelete, o
           display:'flex', alignItems:'center', gap:4,
           padding:`6px 8px 6px ${14 + depth * 18}px`,
           background: isSelected ? '#e0eaf8' : 'transparent',
-          borderRadius:7, cursor:'pointer', position:'relative',
+          borderRadius:7, cursor: locked ? 'default' : 'pointer', position:'relative',
           borderLeft: isSelected ? `3px solid ${BLUE}` : '3px solid transparent',
+          opacity: locked ? 0.7 : 1,
         }}
-        onClick={() => onSelect(node)}
+        onClick={() => !locked && onSelect(node)}
       >
         <span
           onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
@@ -119,15 +123,23 @@ function FolderNode({ node, depth, selectedId, onSelect, onAddChild, onDelete, o
         >
           {hasChildren ? (open ? '▼' : '▶') : ''}
         </span>
-        <span style={{ fontSize:16, flexShrink:0 }}>{open && hasChildren ? '📂' : '📁'}</span>
-        <span style={{ fontSize:13, fontWeight: isSelected ? 600 : 400, color: isSelected ? BLUE : '#1e293b', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+        <span style={{ fontSize:16, flexShrink:0 }}>{locked ? '🔒' : (open && hasChildren ? '📂' : '📁')}</span>
+        <span style={{ fontSize:13, fontWeight: isSelected ? 600 : 400, color: locked ? '#94a3b8' : isSelected ? BLUE : '#1e293b', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
           {node.name}
         </span>
-        {node.is_template && (
-          <span title="Shared template — visible to everyone"
-            style={{ fontSize:9, color:'#a16207', background:'#fef3c7', borderRadius:99, padding:'1px 7px', fontWeight:600, flexShrink:0 }}>
-            TEMPLATE
+        {permColor && (
+          <span title={`You have ${node.user_permission} access`}
+            style={{ fontSize:9, color: permColor, background: permColor + '18', borderRadius:99, padding:'1px 7px', fontWeight:700, flexShrink:0, border:`1px solid ${permColor}40` }}>
+            {node.user_permission}
           </span>
+        )}
+        {locked && (
+          <button
+            onClick={e => { e.stopPropagation(); onRequestAccess(node) }}
+            title="Request access to this folder"
+            style={{ fontSize:10, color:BLUE, background:'#eff6ff', border:`1px solid #bfdbfe`,
+              borderRadius:99, padding:'2px 8px', cursor:'pointer', fontWeight:600, flexShrink:0 }}
+          >Request</button>
         )}
         {canEdit(node) && (
           <button
@@ -148,7 +160,7 @@ function FolderNode({ node, depth, selectedId, onSelect, onAddChild, onDelete, o
                     ? { icon:'🔒', label:'Unpublish (private)', action: () => { setMenuOpen(false); onTogglePublish(node) } }
                     : { icon:'🌐', label:'Publish as Template', action: () => { setMenuOpen(false); onTogglePublish(node) } },
                 ] : []),
-                { icon:'🗑', label:'Delete',         action: () => { setMenuOpen(false); onDelete(node) }, red:true },
+                { icon:'🗑', label:'Delete', action: () => { setMenuOpen(false); onDelete(node) }, red:true },
               ].map(m => (
                 <button key={m.label} onClick={m.action}
                   style={{ display:'flex', alignItems:'center', gap:8, width:'100%', padding:'9px 14px', border:'none', background:'none', fontSize:13, cursor:'pointer', color: m.red ? '#ef4444' : '#1e293b', textAlign:'left' }}
@@ -169,7 +181,7 @@ function FolderNode({ node, depth, selectedId, onSelect, onAddChild, onDelete, o
             <FolderNode key={child.id} node={child} depth={depth + 1}
               selectedId={selectedId} onSelect={onSelect}
               onAddChild={onAddChild} onDelete={onDelete} onMove={onMove}
-              onTogglePublish={onTogglePublish}
+              onTogglePublish={onTogglePublish} onRequestAccess={onRequestAccess}
               canEdit={canEdit} isAdmin={isAdmin} />
           ))}
         </div>
@@ -288,9 +300,11 @@ function FolderEditModal({ existing, allFolders, defaultParentId, isAdmin, onClo
   }
 
   return (
-    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000,
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:9999,
       display:'flex', alignItems:'center', justifyContent:'center'}}>
-      <form onSubmit={submit} style={{background:WHITE, borderRadius:12, padding:24, width:420, maxWidth:'90%'}}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()}
+        style={{background:'#fff', borderRadius:12, padding:24, width:420, maxWidth:'90%',
+          boxShadow:'0 8px 40px rgba(0,0,0,0.22)'}}>
         <h3 style={{margin:'0 0 4px', fontSize:16, fontWeight:700, color:'#1e293b'}}>
           {existing ? 'Move / Rename Folder' : 'New Folder'}
         </h3>
@@ -391,9 +405,10 @@ function AddDocTypesModal({ folder, onClose, onSaved }) {
   }
 
   return (
-    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000,
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:9999,
       display:'flex', alignItems:'center', justifyContent:'center'}}>
-      <form onSubmit={submit} style={{background:WHITE, borderRadius:12, padding:24, width:540, maxWidth:'92%', maxHeight:'90vh', display:'flex', flexDirection:'column'}}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()}
+        style={{background:'#fff', borderRadius:12, padding:24, width:540, maxWidth:'92%', maxHeight:'90vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.22)'}}>
         <h3 style={{margin:'0 0 4px', fontSize:16, fontWeight:700, color:'#1e293b'}}>
           Pin Document Types in <span style={{color:BLUE}}>{folder.name}</span>
         </h3>
@@ -469,9 +484,12 @@ export default function DocumentLibrary() {
   const [search, setSearch] = useState('')
   const [groupBy, setGroupBy] = useState('none')
   const [sortBy, setSortBy] = useState('created_desc')
-  const [folderEdit, setFolderEdit] = useState(null) // { existing, defaultParentId } or null
+  const [folderEdit, setFolderEdit] = useState(null)
   const [addDocTypesFor, setAddDocTypesFor] = useState(null)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [requestAccessFor, setRequestAccessFor] = useState(null)
+  const [inboxOpen, setInboxOpen] = useState(false)
+  const [inboxCount, setInboxCount] = useState(0)
 
   const loadTree = useCallback(async () => {
     const res = await libraryAPI.tree()
@@ -509,6 +527,8 @@ export default function DocumentLibrary() {
       const u = JSON.parse(localStorage.getItem('dms_user') || 'null')
       setMe(u)
     } catch {}
+    // Load inbox count for folder managers / admins
+    libraryAPI.accessRequestsInbox().then(r => setInboxCount((r.data || []).length)).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -627,13 +647,24 @@ export default function DocumentLibrary() {
       {/* ── Left Panel ── */}
       <div style={{ width:280, flexShrink:0, background:WHITE, borderRight:`1px solid ${BORDER}`, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         <div style={{ padding:'16px 14px 12px', borderBottom:`1px solid ${BORDER}` }}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: inboxCount > 0 ? 8 : 0 }}>
             <span style={{ fontWeight:700, fontSize:14, color:'#1e293b' }}>📚 Document Folder</span>
-            <button
-              onClick={() => setFolderEdit({ existing: null, defaultParentId: null })}
-              title="Create a new folder"
-              style={{ background:BLUE, color:WHITE, border:'none', borderRadius:7, padding:'5px 10px', fontSize:12, fontWeight:600, cursor:'pointer' }}
-            >+ Folder</button>
+            <div style={{ display:'flex', gap:6 }}>
+              {inboxCount > 0 && (
+                <button
+                  onClick={() => setInboxOpen(true)}
+                  title="Access requests pending your review"
+                  style={{ background:'#fef3c7', color:'#92400e', border:'1px solid #fcd34d', borderRadius:7, padding:'5px 10px', fontSize:12, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
+                >
+                  🔔 {inboxCount}
+                </button>
+              )}
+              <button
+                onClick={() => setFolderEdit({ existing: null, defaultParentId: selectedFolder?.id ?? null })}
+                title="Create a new folder"
+                style={{ background:BLUE, color:WHITE, border:'none', borderRadius:7, padding:'5px 10px', fontSize:12, fontWeight:600, cursor:'pointer' }}
+              >+ Folder</button>
+            </div>
           </div>
         </div>
 
@@ -652,6 +683,7 @@ export default function DocumentLibrary() {
               onDelete={handleDelete}
               onMove={(n) => setFolderEdit({ existing: n, defaultParentId: null })}
               onTogglePublish={handleTogglePublish}
+              onRequestAccess={setRequestAccessFor}
               canEdit={canEdit}
               isAdmin={isAdmin}
             />
@@ -660,6 +692,7 @@ export default function DocumentLibrary() {
       </div>
 
       {/* ── Right Panel ── */}
+
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         {!selectedFolder ? (
           <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:'#94a3b8', gap:12 }}>
@@ -951,6 +984,29 @@ export default function DocumentLibrary() {
             setUploadOpen(false)
             const res = await libraryAPI.docTypeDocuments(viewingDocType.id)
             setDocTypeView(res.data)
+          }}
+        />
+      )}
+
+      {/* ── Request Access Modal ── */}
+      {requestAccessFor && (
+        <RequestAccessModal
+          folder={requestAccessFor}
+          onClose={() => setRequestAccessFor(null)}
+          onSuccess={() => {
+            setRequestAccessFor(null)
+            alert(`Access request submitted for "${requestAccessFor.name}". The folder manager will review it.`)
+          }}
+        />
+      )}
+
+      {/* ── Access Requests Inbox Modal ── */}
+      {inboxOpen && (
+        <AccessInboxModal
+          onClose={() => setInboxOpen(false)}
+          onDecided={() => {
+            libraryAPI.accessRequestsInbox().then(r => setInboxCount((r.data || []).length)).catch(() => {})
+            loadTree()
           }}
         />
       )}

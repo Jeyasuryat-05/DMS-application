@@ -1,5 +1,7 @@
-import io, os, uuid, json, traceback, mimetypes
+import io, os, uuid, json, traceback, mimetypes, urllib.parse, logging
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 from django.conf import settings
 from django.utils import timezone
 from django.http import FileResponse, HttpResponse
@@ -18,16 +20,37 @@ from api.models import (
 from api import email_utils
 from api.authentication import (
     require_read, require_create, require_edit, require_delete, _flag_check,
+    create_file_view_token, verify_file_view_token,
 )
 
 UPLOAD_DIR = 'uploads'
+MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB per file
+
+# SVG removed: it can contain embedded <script> tags and is served inline,
+# enabling stored XSS. Serve SVGs as downloads only if needed.
 ALLOWED_FORMATS = {
     '.pdf', '.dwg', '.dxf', '.cad', '.doc', '.docx', '.xls', '.xlsx',
     '.ppt', '.pptx', '.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif',
-    '.zip', '.rar', '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.svg',
+    '.zip', '.rar', '.mp4', '.avi', '.mov', '.mkv', '.wmv',
     '.txt', '.rtf', '.csv', '.xml', '.json', '.eml', '.msg', '.vsd',
     '.step', '.stp', '.iges', '.stl', '.dgn',
 }
+
+# Safe MIME types allowed for inline viewing. Anything not in this map is
+# forced to application/octet-stream (download). SVG excluded — XSS risk.
+_SAFE_INLINE_MIME = {
+    'pdf': 'application/pdf',
+    'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+    'gif': 'image/gif', 'tiff': 'image/tiff', 'tif': 'image/tiff',
+    'bmp': 'image/bmp', 'webp': 'image/webp',
+    'txt': 'text/plain', 'csv': 'text/csv',
+    'mp4': 'video/mp4', 'webm': 'video/webm', 'mp3': 'audio/mpeg',
+}
+
+def _safe_mime(filename, file_format):
+    """Return a safe MIME type for inline viewing, forcing download for risky types."""
+    ext = (os.path.splitext(filename or '')[1].lstrip('.') or file_format or '').lower()
+    return _SAFE_INLINE_MIME.get(ext, 'application/octet-stream')
 
 _GLOBAL_META_KEY = 'directorate_group_sub_group'
 _GLOBAL_META_FIELD = None
@@ -166,8 +189,8 @@ def _list_documents(request):
         confidential = request.query_params.get('confidential')
         flagged_for_deletion = request.query_params.get('flagged_for_deletion')
         expiring_days = request.query_params.get('expiring_days')
-        skip = int(request.query_params.get('skip', 0))
-        limit = int(request.query_params.get('limit', 100))
+        skip = max(0, int(request.query_params.get('skip', 0)))
+        limit = min(max(1, int(request.query_params.get('limit', 100))), 500)
 
         qs = Document.objects.filter(is_deleted=False).select_related('doc_type', 'workflow')
         if q:
@@ -188,11 +211,11 @@ def _list_documents(request):
         if flagged_for_deletion is not None:
             qs = qs.filter(flagged_for_deletion=(flagged_for_deletion.lower() == 'true'))
         if expiring_days:
-            cutoff = datetime.utcnow() + timedelta(days=int(expiring_days))
+            cutoff = timezone.now() + timedelta(days=int(expiring_days))
             qs = qs.filter(
                 expiry_date__isnull=False,
                 expiry_date__lte=cutoff,
-                expiry_date__gte=datetime.utcnow(),
+                expiry_date__gte=timezone.now(),
             )
         docs = qs.order_by('-created_at')[skip:skip + limit]
         out = []
@@ -252,8 +275,8 @@ def _list_documents(request):
             out = [r for r in out if r.get('status') == 'Released']
         return Response(out)
     except Exception:
-        print('list_documents error:', traceback.format_exc())
-        return Response([])
+        logger.exception('list_documents error')
+        return Response({'error': 'Error loading documents'}, status=500)
 
 
 @transaction.atomic
@@ -285,6 +308,30 @@ def _create_document(request):
             doc_type = DocumentType.objects.get(id=doc_type_id)
         except DocumentType.DoesNotExist:
             return Response({'error': 'Document type not found'}, status=404)
+
+        # Folder hierarchy UPLOAD permission check
+        if getattr(request.user, 'role', '') != 'System Admin':
+            from api.models import UserFolderDocType, FolderPermission, UserFolder
+            # Check if this doc type is pinned in any folder at all
+            if UserFolderDocType.objects.filter(doc_type_id=doc_type_id).exists():
+                # It is folder-controlled — user must have UPLOAD on at least one folder that pins it
+                upload_folder_ids = set(
+                    FolderPermission.objects.filter(user=request.user, permission='UPLOAD')
+                    .values_list('folder_id', flat=True)
+                )
+                owned_ids = set(
+                    UserFolder.objects.filter(owner=request.user, is_active=True)
+                    .values_list('id', flat=True)
+                )
+                has_upload = UserFolderDocType.objects.filter(
+                    doc_type_id=doc_type_id,
+                    folder_id__in=(upload_folder_ids | owned_ids),
+                ).exists()
+                if not has_upload:
+                    return Response(
+                        {'error': f'You do not have upload permission for "{doc_type.name}". Request folder access first.'},
+                        status=403,
+                    )
 
         parsed_meta = json.loads(custom_metadata or '{}')
         usi_from_meta = (parsed_meta.get('usi') or parsed_meta.get('usi_kks_code') or usi_kks_code or '').strip() or None
@@ -380,7 +427,9 @@ def _create_document(request):
                     continue
                 unique_name = f'{uuid.uuid4()}{ext}'
                 path = os.path.join(UPLOAD_DIR, unique_name)
-                content = upload.read()
+                content = upload.read(MAX_FILE_BYTES + 1)
+                if len(content) > MAX_FILE_BYTES:
+                    return Response({'error': f'File "{upload.name}" exceeds the 50 MB size limit.'}, status=400)
                 with open(path, 'wb') as f:
                     f.write(content)
                 DocumentFile.objects.create(
@@ -388,7 +437,7 @@ def _create_document(request):
                     filename=upload.name,
                     file_path=path,
                     file_size=len(content),
-                    mime_type=upload.content_type,
+                    mime_type=_safe_mime(upload.name, ext.lstrip('.')),
                     file_format=ext.lstrip('.').upper(),
                     uploaded_by_id=request.user.id,
                 )
@@ -408,7 +457,7 @@ def _create_document(request):
 
         return Response({'id': doc.id, 'doc_number': doc.doc_number, 'message': 'Document created'}, status=201)
     except Exception:
-        print('create_document error:', traceback.format_exc())
+        logger.exception('create_document error')
         raise
 
 
@@ -584,7 +633,7 @@ def _get_document(request, doc_id):
 
         return Response(base)
     except Exception:
-        print('get_document error:', traceback.format_exc())
+        logger.exception('get_document error')
         return Response({'error': 'Error loading document'}, status=500)
 
 
@@ -757,7 +806,7 @@ def _update_document(request, doc_id):
         )
         return Response({'message': 'Updated'})
     except Exception:
-        print('update_document error:', traceback.format_exc())
+        logger.exception('update_document error')
         return Response({'error': 'Error updating document'}, status=500)
 
 
@@ -766,6 +815,10 @@ def _delete_document(request, doc_id):
         doc = Document.objects.get(id=doc_id)
     except Document.DoesNotExist:
         return Response({'error': 'Not found'}, status=404)
+
+    # Only the creator or an admin may delete — having can_delete alone is not enough
+    if not _can_edit_doc(request.user, doc):
+        return Response({'error': 'You do not have permission to delete this document.'}, status=403)
 
     if doc.status in ('Approved', 'Released'):
         return Response({'error': 'Cannot delete Approved or Released documents.'}, status=403)
@@ -799,7 +852,7 @@ def checkout(request, doc_id):
             return Response({'error': f'Already checked out by user {doc.checked_out_by_id}'}, status=400)
         doc.checked_out = True
         doc.checked_out_by_id = request.user.id
-        doc.checked_out_at = datetime.utcnow()
+        doc.checked_out_at = timezone.now()
         doc.save(update_fields=['checked_out', 'checked_out_by_id', 'checked_out_at'])
         AuditLog.objects.create(document_id=doc.id, user_id=request.user.id, action='Checked Out')
     else:
@@ -935,12 +988,14 @@ def upload_version(request, doc_id):
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         ext = os.path.splitext(file.name)[1].lower()
         file_path = os.path.join(UPLOAD_DIR, f'{uuid.uuid4()}{ext}')
-        content = file.read()
+        content = file.read(MAX_FILE_BYTES + 1)
+        if len(content) > MAX_FILE_BYTES:
+            return Response({'error': f'File exceeds the 50 MB size limit.'}, status=400)
         with open(file_path, 'wb') as f:
             f.write(content)
         DocumentFile.objects.create(
             document_id=doc.id, filename=file.name, file_path=file_path,
-            file_size=len(content), mime_type=file.content_type,
+            file_size=len(content), mime_type=_safe_mime(file.name, ext.lstrip('.')),
             file_format=ext.lstrip('.').upper(), uploaded_by_id=request.user.id,
         )
 
@@ -1155,7 +1210,7 @@ def decide_access_request(request, request_id):
             note=f'Denied for {ar.requester.name} ({ar.requester.email})',
         )
 
-    ar.decided_at = datetime.utcnow()
+    ar.decided_at = timezone.now()
     ar.decided_by_id = request.user.id
     ar.save(update_fields=['status', 'decided_at', 'decided_by'])
 
@@ -1280,6 +1335,24 @@ def _can_edit_doc(user, doc):
 
 @api_view(['GET'])
 @require_read
+def get_file_view_token(request, doc_id, file_id):
+    """
+    Issues a short-lived (5-min) file-view token for inline viewing.
+    The frontend requests this first, then uses the token as ?fv_token=...
+    on the view_file endpoint — avoiding the main session JWT in query strings.
+    """
+    try:
+        f = DocumentFile.objects.select_related('document').get(id=file_id, document_id=doc_id)
+    except DocumentFile.DoesNotExist:
+        return Response({'error': 'File not found'}, status=404)
+    if not _can_access_doc(request.user, f.document):
+        return Response({'error': 'Access denied'}, status=403)
+    token = create_file_view_token(request.user.id, int(doc_id), int(file_id))
+    return Response({'fv_token': token})
+
+
+@api_view(['GET'])
+@require_read
 def download_file(request, doc_id, file_id):
     try:
         f = DocumentFile.objects.select_related('document').get(id=file_id, document_id=doc_id)
@@ -1300,13 +1373,27 @@ def download_file(request, doc_id, file_id):
         document_id=doc_id, file_id=file_id,
         user_id=request.user.id, action='download',
     )
-    response = FileResponse(open(f.file_path, 'rb'), as_attachment=True, filename=f.filename)
+    safe_name = urllib.parse.quote(f.filename or 'file', safe='')
+    response = FileResponse(open(f.file_path, 'rb'), as_attachment=True)
+    response['Content-Disposition'] = f"attachment; filename*=UTF-8''{safe_name}"
     return response
 
 
 @api_view(['GET'])
-@require_read
 def view_file(request, doc_id, file_id):
+    # Accept either the normal session Bearer token (Authorization header) or
+    # a short-lived file-view token (?fv_token=...) issued by get_file_view_token.
+    fv_token = request.query_params.get('fv_token', '')
+    if fv_token:
+        try:
+            from api.models import User as _User
+            user_id = verify_file_view_token(fv_token, int(doc_id), int(file_id))
+            request.user = _User.objects.get(id=user_id, is_active=True)
+        except Exception:
+            return Response({'error': 'Invalid or expired file view token'}, status=403)
+    elif not (request.user and getattr(request.user, 'is_active', False)):
+        return Response({'error': 'Authentication required'}, status=401)
+
     try:
         f = DocumentFile.objects.select_related('document').get(id=file_id, document_id=doc_id)
     except DocumentFile.DoesNotExist:
@@ -1318,18 +1405,9 @@ def view_file(request, doc_id, file_id):
     if not os.path.exists(f.file_path):
         return Response({'error': 'File not found on disk'}, status=404)
 
-    mime, _ = mimetypes.guess_type(f.filename or f.file_path)
-    if not mime:
-        ext = (f.file_format or '').lower()
-        mime_map = {
-            'pdf': 'application/pdf', 'png': 'image/png', 'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg', 'gif': 'image/gif', 'tiff': 'image/tiff',
-            'tif': 'image/tiff', 'bmp': 'image/bmp', 'webp': 'image/webp',
-            'svg': 'image/svg+xml', 'txt': 'text/plain', 'csv': 'text/csv',
-            'xml': 'text/xml', 'json': 'application/json',
-            'mp4': 'video/mp4', 'webm': 'video/webm', 'mp3': 'audio/mpeg',
-        }
-        mime = mime_map.get(ext, 'application/octet-stream')
+    # Use server-derived MIME — never trust the client-supplied content_type
+    # stored in db, and exclude SVG from inline viewing (XSS risk).
+    mime = _safe_mime(f.filename, f.file_format)
 
     range_header = request.META.get('HTTP_RANGE', '')
     is_initial_request = (not range_header) or range_header.replace(' ', '').startswith('bytes=0-')
@@ -1344,7 +1422,9 @@ def view_file(request, doc_id, file_id):
         )
 
     response = FileResponse(open(f.file_path, 'rb'), content_type=mime)
-    response['Content-Disposition'] = f'inline; filename="{f.filename}"'
+    # RFC 5987 percent-encode filename to prevent header injection
+    safe_name = urllib.parse.quote(f.filename or 'file', safe='')
+    response['Content-Disposition'] = f"inline; filename*=UTF-8''{safe_name}"
     return response
 
 
@@ -1388,7 +1468,9 @@ def add_file(request, doc_id):
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     path = os.path.join(UPLOAD_DIR, f'{uuid.uuid4()}{ext}')
-    content = file.read()
+    content = file.read(MAX_FILE_BYTES + 1)
+    if len(content) > MAX_FILE_BYTES:
+        return Response({'error': f'File exceeds the 50 MB size limit.'}, status=400)
     with open(path, 'wb') as f:
         f.write(content)
 
@@ -1397,7 +1479,7 @@ def add_file(request, doc_id):
 
     DocumentFile.objects.create(
         document_id=doc_id, filename=file.name, file_path=path,
-        file_size=len(content), mime_type=file.content_type,
+        file_size=len(content), mime_type=_safe_mime(file.name, file_format),
         file_format=file_format, uploaded_by_id=request.user.id,
     )
     AuditLog.objects.create(
@@ -1621,19 +1703,7 @@ def generate_cover_page(request, doc_id):
         .order_by('created_at')
     )
 
-    # Custom template fields configured by admin
-    template = CoverPageTemplate.objects.first()
-    custom_fields = []
-    if template and template.fields:
-        for f in template.fields:
-            if not f.get('show', True):
-                continue
-            ftype = f.get('type', '')
-            label = f.get('label', '')
-            value = _resolve_cover_field(ftype, doc, request.user)
-            custom_fields.append((label, value))
-
-    pdf_bytes = _build_cover_page_pdf(doc, role_map, versions, custom_fields)
+    pdf_bytes = _build_cover_page_pdf(doc, role_map, versions)
     safe_title = (doc.doc_number or 'cover').replace('/', '-').replace(' ', '_')
     response = HttpResponse(pdf_bytes, content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="{safe_title}_cover_page.pdf"'
@@ -1656,7 +1726,7 @@ def _resolve_cover_field(ftype, doc, user):
     return mapping.get(ftype, '')
 
 
-def _build_cover_page_pdf(doc, role_map, versions, custom_fields):
+def _build_cover_page_pdf(doc, role_map, versions):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.lib import colors
@@ -1795,12 +1865,27 @@ def _build_cover_page_pdf(doc, role_map, versions, custom_fields):
     story.append(roles_tbl)
     story.append(Spacer(1, 6*mm))
 
-    # ── Custom template fields ────────────────────────────────────────────────
-    if custom_fields:
+    # ── Custom template fields (exclude fields already shown in the header) ─────
+    ALREADY_SHOWN = {'document_title', 'document_number', 'revision', 'prepared_by'}
+    # Resolve which field types are already on the page so we don't repeat them.
+    template = CoverPageTemplate.objects.first()
+    unique_custom = []
+    if template and template.fields:
+        for f in template.fields:
+            if not f.get('show', True):
+                continue
+            if f.get('type', '') in ALREADY_SHOWN:
+                continue   # skip — already in header
+            lbl = f.get('label', '')
+            val = _resolve_cover_field(f.get('type', ''), doc, None)
+            if val:
+                unique_custom.append((lbl, val))
+
+    if unique_custom:
         story.append(HRFlowable(width=W, thickness=0.5, color=colors.lightgrey))
         story.append(Spacer(1, 3*mm))
         cf_data = [[Paragraph(f'<b>{lbl}:</b>', tiny_left), Paragraph(val, tiny_left)]
-                   for lbl, val in custom_fields]
+                   for lbl, val in unique_custom]
         cf_tbl = Table(cf_data, colWidths=[40*mm, W - 40*mm])
         cf_tbl.setStyle(TableStyle([
             ('FONTSIZE',      (0,0), (-1,-1), 8),

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { idleTimedOut } from '../hooks/idleFlag'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -11,32 +12,25 @@ api.interceptors.request.use(cfg => {
   return cfg
 })
 
-// On 401: only redirect if token is truly gone (not just missing on this request)
+// On 401: token is expired or invalid → force logout.
+// 403 means permission denied (not token expired) — leave it for per-endpoint handling.
+// If idle timeout already fired (idleTimedOut=true), the modal handles re-login
+// so we skip the redirect and let the modal stay visible.
 api.interceptors.response.use(
   response => response,
   error => {
-    if (error.response?.status === 401) {
-      const isAuthEndpoint = error.config?.url?.includes('/auth/login') ||
-                             error.config?.url?.includes('/auth/config') ||
-                             error.config?.url?.includes('/auth/verify')
-      const hasToken = !!localStorage.getItem('dms_token')
+    const status = error.response?.status
+    const url    = error.config?.url || ''
 
-      // Workflow action / initiate 401 = wrong password digital-signature
-      // failure (not session expiry) — do NOT logout, let the modal show the
-      // error inline.
-      const isWorkflowAction = error.config?.url?.includes('/workflow/') &&
-                               (error.config?.url?.includes('/action') ||
-                                error.config?.url?.includes('/return') ||
-                                error.config?.url?.includes('/initiate'))
+    const isAuthEndpoint = url.includes('/auth/login') || url.includes('/auth/config') || url.includes('/auth/verify')
+    const hasToken       = !!localStorage.getItem('dms_token')
 
-      // Only clear and redirect if this wasn't an auth endpoint or workflow action
-      // AND we actually had a token (meaning it expired/was rejected)
-      if (!isAuthEndpoint && !isWorkflowAction && hasToken) {
-        localStorage.removeItem('dms_token')
-        localStorage.removeItem('dms_user')
-        window.location.href = '/login'
-      }
+    if (status === 401 && !isAuthEndpoint && hasToken && !idleTimedOut) {
+      localStorage.removeItem('dms_token')
+      localStorage.removeItem('dms_user')
+      window.location.href = '/login'
     }
+
     return Promise.reject(error)
   }
 )
@@ -73,6 +67,7 @@ export const documentsAPI = {
   downloadFile:  (docId, fileId)       => api.get(`/documents/${docId}/files/${fileId}/download`, {
     responseType: 'blob'
   }),
+  getFileViewToken: (docId, fileId)    => api.get(`/documents/${docId}/files/${fileId}/view-token`),
   addFeedback:   (id, comment, taggedUserId) => api.post(`/documents/${id}/feedback`, { comment, tagged_user_id: taggedUserId || null }),
   addReference:  (id, targetId, note)  => api.post(`/documents/${id}/references`, {
     target_doc_id: targetId, note
@@ -143,7 +138,7 @@ export const adminAPI = {
   updateUser:       (id, data)   => api.put(`/admin/users/${id}`, data),
   deactivateUser:   (id)         => api.delete(`/admin/users/${id}`),
   activateUser:     (id)         => api.post(`/admin/users/${id}/activate`),
-  listDocTypes:     ()           => api.get('/admin/document-types'),
+  listDocTypes:     ()           => api.get('/admin/document-types', { params: { _t: Date.now() } }),
   createDocType:    (data)       => api.post('/admin/document-types', data),
   updateDocType:    (id, data)   => api.put(`/admin/document-types/${id}`, data),
   listWfConfigs:    ()           => api.get('/admin/workflow-configs'),
@@ -186,6 +181,21 @@ export const libraryAPI = {
   deleteFolder:      (id)         => api.delete(`/library/folders/${id}`),
   folderDocuments:   (id)         => api.get(`/library/folders/${id}/documents`),
   docTypeDocuments:  (id)         => api.get(`/library/doc-types/${id}/documents`),
+
+  // Folder permissions
+  getFolderPermissions:    (folderId)          => api.get(`/library/folders/${folderId}/permissions`),
+  grantFolderPermission:   (folderId, data)    => api.post(`/library/folders/${folderId}/permissions`, data),
+  revokeFolderPermission:  (folderId, userId)  => api.delete(`/library/folders/${folderId}/permissions/${userId}`),
+
+  // Upload permissions
+  myUploadDocTypes:      ()                => api.get('/library/my-upload-doc-types'),
+
+  // Access requests
+  requestFolderAccess:   (folderId, data)  => api.post(`/library/folders/${folderId}/request-access`, data),
+  myAccessRequests:      ()                => api.get('/library/access-requests/mine'),
+  accessRequestsInbox:   ()                => api.get('/library/access-requests/inbox'),
+  allAccessRequests:     ()                => api.get('/library/access-requests/all'),
+  decideAccessRequest:   (id, data)        => api.post(`/library/access-requests/${id}/decide`, data),
 }
 
 export default api

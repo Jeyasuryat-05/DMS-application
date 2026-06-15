@@ -1,0 +1,126 @@
+{
+  "name": "DMS Dev Environment",
+
+  // Use the existing docker-compose.yml at the project root
+  "dockerComposeFile": "../docker-compose.yml",
+
+  // Attach VS Code to the backend container where the code lives
+  "service": "backend",
+
+  // Mount the whole project into /workspace so both Backend and Frontend are accessible
+  "workspaceFolder": "/workspace",
+  "workspaceMountConsistency": "cached",
+
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached"
+  ],
+
+  // Keep the compose stack running after VS Code attaches
+  "shutdownAction": "stopCompose",
+
+  // ── Features ────────────────────────────────────────────────────────────────
+  // Install Node.js (for the React/Vite frontend) and GitHub CLI alongside Python
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // ── VS Code extensions ───────────────────────────────────────────────────────
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Python
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.flake8",
+
+        // Django
+        "batisteo.vscode-django",
+
+        // JavaScript / React / Vite
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "dsznajder.es7-react-js-snippets",
+
+        // Docker & Dev Containers
+        "ms-azuretools.vscode-docker",
+        "ms-vscode-remote.remote-containers",
+
+        // PostgreSQL
+        "ckolkman.vscode-postgres",
+
+        // Git & Productivity
+        "eamodio.gitlens",
+        "streetsidesoftware.code-spell-checker",
+        "christian-kohler.path-intellisense",
+        "visualstudioexptteam.vscodeintellicode"
+      ],
+
+      "settings": {
+        // Python
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter",
+          "editor.formatOnSave": true
+        },
+
+        // JavaScript / React
+        "[javascript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode",
+          "editor.formatOnSave": true
+        },
+        "[javascriptreact]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode",
+          "editor.formatOnSave": true
+        },
+
+        // Editor defaults
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "files.trimTrailingWhitespace": true,
+        "files.eol": "\n",
+
+        // Terminal
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // ── Forwarded ports ──────────────────────────────────────────────────────────
+  // Django backend, Vite dev server, PostgreSQL
+  "forwardPorts": [8000, 5173, 5432],
+  "portsAttributes": {
+    "8000": {
+      "label": "Django Backend",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "Vite Frontend",
+      "onAutoForward": "openBrowser"
+    },
+    "5432": {
+      "label": "PostgreSQL",
+      "onAutoForward": "silent"
+    }
+  },
+
+  // ── Post-create setup ────────────────────────────────────────────────────────
+  // Runs once after the container is first created
+  "postCreateCommand": "cd /workspace/Backend && pip install -r requirements.txt && cd /workspace/Frontend && npm install",
+
+  // Runs every time the container starts
+  "postStartCommand": "cd /workspace/Backend && python manage.py migrate --run-syncdb 2>/dev/null || true",
+
+  // ── Environment variables passed into the container ─────────────────────────
+  // Real secrets should go in Backend/.env — these are safe dev-only defaults
+  "remoteEnv": {
+    "DJANGO_SETTINGS_MODULE": "config.settings.development",
+    "PYTHONPATH": "/workspace/Backend"
+  }
+}

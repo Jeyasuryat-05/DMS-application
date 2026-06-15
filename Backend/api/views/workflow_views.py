@@ -1,5 +1,6 @@
 import os, uuid, traceback
 from datetime import datetime
+from django.utils import timezone as _tz
 from django.db import models
 from django.http import FileResponse
 from django.db import transaction
@@ -123,20 +124,7 @@ def initiate_workflow(request, doc_id):
     if purpose not in ('release', 'archive'):
         return Response({'error': f'Unknown workflow purpose {purpose!r}'}, status=400)
 
-    # Re-authenticate the initiator with their password (digital signature on
-    # workflow start). Mirrors the verification done at every approve/reject
-    # step.
-    password = data.get('password', '')
-    if not password:
-        return Response({'error': 'Password is required to authenticate workflow initiation (digital signature).'}, status=400)
-    import bcrypt as _bcrypt
-    stored_hash = (request.user.hashed_password or '').encode()
-    try:
-        valid = _bcrypt.checkpw(password.encode(), stored_hash)
-    except Exception:
-        valid = False
-    if not valid:
-        return Response({'error': 'Incorrect password. Please enter your login password to authenticate this action.'}, status=401)
+
 
     if purpose == 'release':
         if doc.status != 'Draft':
@@ -276,9 +264,9 @@ def initiate_workflow(request, doc_id):
                 assignee_id=request.user.id, status='Approved',
                 digital_sig_log={
                     'user': request.user.name, 'action': 'Initiated',
-                    'timestamp': datetime.utcnow().isoformat() + 'Z',
+                    'timestamp': _tz.now().isoformat() + 'Z',
                 },
-                completed_at=datetime.utcnow(),
+                completed_at=_tz.now(),
             )
             wf_level.status = 'Done'
             wf_level.save(update_fields=['status'])
@@ -382,11 +370,11 @@ def workflow_action(request, doc_id):
     ip = request.META.get('REMOTE_ADDR', '')
     task.digital_sig_log = {
         'user': request.user.name, 'user_id': request.user.id,
-        'action': action, 'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'action': action, 'timestamp': _tz.now().isoformat() + 'Z',
         'ip': ip, 'note': note,
     }
     task.action_note = note
-    task.completed_at = datetime.utcnow()
+    task.completed_at = _tz.now()
 
     if action == 'reject':
         rejection_level = level.name
@@ -497,11 +485,11 @@ def workflow_action(request, doc_id):
             _save_wf_snapshot(doc, wf, 'archived')
             wf.stage = 'Archived'
             wf.completed = True
-            wf.completed_at = datetime.utcnow()
+            wf.completed_at = _tz.now()
             wf.save(update_fields=['stage', 'completed', 'completed_at'])
             doc.status = 'Archived'
             doc.status_code = '90'
-            doc.archived_at = datetime.utcnow()
+            doc.archived_at = _tz.now()
             doc.archived_by_id = request.user.id
             doc.save(update_fields=['status', 'status_code', 'archived_at', 'archived_by'])
             _log(request.user, doc, 'Document Archived (Obsolete) — Workflow Complete',
@@ -556,7 +544,7 @@ def workflow_action(request, doc_id):
         _save_wf_snapshot(doc, wf, 'released')
         wf.stage = 'Released'
         wf.completed = True
-        wf.completed_at = datetime.utcnow()
+        wf.completed_at = _tz.now()
         wf.save(update_fields=['stage', 'completed', 'completed_at'])
         doc.status = 'Released'
         doc.status_code = '30'
@@ -658,6 +646,10 @@ def assign_user(request, doc_id):
         wf = doc.workflow
     except Exception:
         return Response({'error': 'Workflow not found'}, status=404)
+
+    # Only System/Sub Admins or the document creator may add assignees
+    if not _is_admin(request.user) and doc.creator_id != request.user.id:
+        return Response({'error': 'Only admins or the document creator can assign workflow users'}, status=403)
 
     step = request.data.get('step')
     assignee_id = request.data.get('assignee_id')
@@ -762,8 +754,12 @@ def checklist_template(request, doc_id, level_id):
     if not file:
         return Response({'error': 'No file provided'}, status=400)
 
+    ext = os.path.splitext(file.name or '')[1].lower()
+    _CHECKLIST_ALLOWED = {'.pdf', '.docx', '.xlsx', '.doc', '.xls'}
+    if ext not in _CHECKLIST_ALLOWED:
+        return Response({'error': f'Only PDF, Word, and Excel files are allowed for checklist templates. Got: {ext or "(no extension)"}'}, status=400)
+
     os.makedirs('uploads/checklists', exist_ok=True)
-    ext = os.path.splitext(file.name)[1].lower()
     unique_name = f'tmpl_{uuid.uuid4()}{ext}'
     path = f'uploads/checklists/{unique_name}'
     content = file.read()
@@ -815,8 +811,12 @@ def submit_completed_checklist(request, doc_id, task_id):
     if not file:
         return Response({'error': 'No file provided'}, status=400)
 
+    ext = os.path.splitext(file.name or '')[1].lower()
+    _CHECKLIST_ALLOWED = {'.pdf', '.docx', '.xlsx', '.doc', '.xls'}
+    if ext not in _CHECKLIST_ALLOWED:
+        return Response({'error': f'Only PDF, Word, and Excel files are allowed for checklist submissions. Got: {ext or "(no extension)"}'}, status=400)
+
     os.makedirs('uploads/checklists', exist_ok=True)
-    ext = os.path.splitext(file.name)[1].lower()
     unique_name = f'done_{uuid.uuid4()}{ext}'
     path = f'uploads/checklists/{unique_name}'
     content = file.read()
@@ -867,7 +867,7 @@ def download_history_checklist(request, doc_id):
 # ── Admin Workflow Recovery ────────────────────────────────────────────────────
 
 def _is_admin(user):
-    return bool(user.can_delete or (user.role or '').lower() in ('admin', 'administrator', 'system admin', 'dms admin'))
+    return (user.role or '') in ('System Admin', 'Sub Admin')
 
 
 @api_view(['POST'])

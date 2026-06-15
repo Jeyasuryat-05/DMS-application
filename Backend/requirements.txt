@@ -13,3 +13,5 @@ openpyxl==3.1.2
 Pillow>=10.0
 reportlab==4.2.0
 ezdxf==1.3.4
+defusedxml>=0.7.1
+# pyrfc>=2.8.0  # SAP RFC integration — uncomment and install SAP NetWeaver RFC SDK first

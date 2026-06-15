@@ -1,49 +1,41 @@
 import { useState, useEffect, useRef } from 'react'
-import {
-  ObjectStatus,
-  Button,
-  Card as UI5Card,
-  Input as UI5Input,
-  Select as UI5Select,
-  Option,
-  TextArea,
-  Label,
-  BusyIndicator,
-  Dialog,
-  Bar,
-  Title,
-  ComboBox,
-  ComboBoxItem,
-  TabContainer,
-  Tab,
-  FlexBox,
-  Text,
-} from '@ui5/webcomponents-react'
+import { createPortal } from 'react-dom'
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
-const STATUS_STATE = {
-  'Draft':        'Information',
-  'Under Review': 'Critical',
-  'Approved':     'Positive',
-  'Released':     'Positive',
-  'Superseded':   'None',
-  'Rejected':     'Negative',
-  'Archived':     'None',
-  'Expired':      'Critical',
-  'Prepare':      'Information',
-  'Check':        'Critical',
-  'Review':       'Information',
-  'Approve':      'Positive',
-  'Completed':    'Positive',
-  'Pending':      'Critical',
+
+const STATUS_COLORS = {
+  'Draft':        { bg: '#EBF5FE', color: '#0070F2', border: '#0070F2' },
+  'Under Review': { bg: '#FEF3C7', color: '#E9730C', border: '#E9730C' },
+  'In Check':     { bg: '#F3E8FF', color: '#7c3aed', border: '#7c3aed' },
+  'In Review':    { bg: '#F3E8FF', color: '#7c3aed', border: '#7c3aed' },
+  'In Approval':  { bg: '#EDE9FE', color: '#6366f1', border: '#6366f1' },
+  'Approved':     { bg: '#E6F4EA', color: '#188918', border: '#188918' },
+  'Released':     { bg: '#D1FAE5', color: '#059669', border: '#059669' },
+  'Rejected':     { bg: '#FEE2E2', color: '#BB0000', border: '#BB0000' },
+  'Archived':     { bg: '#F3F4F6', color: '#6A6D70', border: '#D9D9D9' },
+  'Expired':      { bg: '#FEE2E2', color: '#dc2626', border: '#dc2626' },
+  'Confidential': { bg: '#FEF9C3', color: '#854d0e', border: '#ca8a04' },
+  'Checked Out':  { bg: '#FEF3C7', color: '#92400e', border: '#d97706' },
+  'Completed':    { bg: '#D1FAE5', color: '#059669', border: '#059669' },
+  'Pending':      { bg: '#FEF3C7', color: '#E9730C', border: '#E9730C' },
+  'Active':       { bg: '#E6F4EA', color: '#188918', border: '#188918' },
 }
 
 export function Badge({ label, size = 'sm' }) {
-  const state = STATUS_STATE[label] || 'None'
+  const c = STATUS_COLORS[label] || { bg: '#F3F4F6', color: '#6A6D70', border: '#D9D9D9' }
   return (
-    <ObjectStatus state={state} style={{ fontSize: size === 'sm' ? 11 : 13 }}>
+    <span style={{
+      display: 'inline-block',
+      padding: size === 'sm' ? '2px 8px' : '3px 10px',
+      fontSize: size === 'sm' ? 11 : 13,
+      fontWeight: 600,
+      borderRadius: 99,
+      background: c.bg,
+      color: c.color,
+      border: `1px solid ${c.border}`,
+      whiteSpace: 'nowrap',
+    }}>
       {label}
-    </ObjectStatus>
+    </span>
   )
 }
 
@@ -98,14 +90,22 @@ export function Card({ children, style = {}, highlight = false }) {
   )
 }
 
+const fieldInputStyle = {
+  width: '100%', boxSizing: 'border-box',
+  height: 34, padding: '0 10px',
+  fontSize: 13, fontFamily: 'inherit',
+  border: '1px solid #C0C0C0', borderRadius: 4,
+  background: '#fff', color: '#32363A', outline: 'none',
+}
+
 // ─── Field wrapper ────────────────────────────────────────────────────────────
 export function Field({ label, required, children }) {
   return (
     <div style={{ marginBottom: 14 }}>
       {label && (
-        <Label required={required} style={{ display: 'block', marginBottom: 4 }}>
-          {label}
-        </Label>
+        <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#32363A', marginBottom: 5 }}>
+          {label}{required && <span style={{ color: '#BB0000', marginLeft: 2 }}>*</span>}
+        </label>
       )}
       {children}
     </div>
@@ -116,12 +116,14 @@ export function Field({ label, required, children }) {
 export function Input({ label, required, value, onChange, placeholder, type = 'text', style = {}, ...rest }) {
   return (
     <Field label={label} required={required}>
-      <UI5Input
-        type={type === 'password' ? 'Password' : type === 'number' ? 'Number' : 'Text'}
+      <input
+        type={type}
         value={value ?? ''}
-        onInput={e => onChange(e.target.value)}
+        onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        style={{ width: '100%', ...style }}
+        style={{ ...fieldInputStyle, ...style }}
+        onFocus={e => e.target.style.borderColor = '#0070F2'}
+        onBlur={e => e.target.style.borderColor = '#C0C0C0'}
         {...rest}
       />
     </Field>
@@ -130,21 +132,22 @@ export function Input({ label, required, value, onChange, placeholder, type = 't
 
 // ─── Select ───────────────────────────────────────────────────────────────────
 export function Select({ label, required, value, onChange, options, placeholder = '— Select —' }) {
-  const handleChange = e => {
-    onChange(e.detail.selectedOption?.dataset?.value ?? '')
-  }
   return (
     <Field label={label} required={required}>
-      <UI5Select onChange={handleChange} style={{ width: '100%' }}>
-        <Option data-value="" selected={!value}>{placeholder}</Option>
+      <select
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        style={{ ...fieldInputStyle, height: 34, appearance: 'auto', cursor: 'pointer' }}
+        onFocus={e => e.target.style.borderColor = '#0070F2'}
+        onBlur={e => e.target.style.borderColor = '#C0C0C0'}
+      >
+        <option value="">{placeholder}</option>
         {options.map(o => {
-          const v = o.value ?? o
+          const v = String(o.value ?? o)
           const l = o.label ?? o
-          return (
-            <Option key={v} data-value={v} selected={value === v}>{l}</Option>
-          )
+          return <option key={v} value={v}>{l}</option>
         })}
-      </UI5Select>
+      </select>
     </Field>
   )
 }
@@ -153,27 +156,27 @@ export function Select({ label, required, value, onChange, options, placeholder 
 export function Textarea({ label, required, value, onChange, rows = 3, placeholder }) {
   return (
     <Field label={label} required={required}>
-      <TextArea
+      <textarea
         value={value ?? ''}
-        onInput={e => onChange(e.target.value)}
+        onChange={e => onChange(e.target.value)}
         rows={rows}
         placeholder={placeholder}
-        style={{ width: '100%' }}
+        style={{ ...fieldInputStyle, height: 'auto', padding: '7px 10px', resize: 'vertical', fontFamily: 'inherit' }}
+        onFocus={e => e.target.style.borderColor = '#0070F2'}
+        onBlur={e => e.target.style.borderColor = '#C0C0C0'}
       />
     </Field>
   )
 }
 
 // ─── Metric card ──────────────────────────────────────────────────────────────
-export function Metric({ label, value, color = 'var(--sapTextColor)', sub }) {
+export function Metric({ label, value, color = '#32363A', sub }) {
   return (
-    <UI5Card style={{ textAlign: 'center' }}>
-      <div style={{ padding: '1rem' }}>
-        <div style={{ fontSize: 11, color: 'var(--sapContent_LabelColor)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
-        <div style={{ fontSize: 26, fontWeight: 600, color }}>{value}</div>
-        {sub && <div style={{ fontSize: 11, color: 'var(--sapContent_LabelColor)', marginTop: 2 }}>{sub}</div>}
-      </div>
-    </UI5Card>
+    <div style={{ background: '#fff', border: '1px solid #D9D9D9', borderRadius: 6, textAlign: 'center', padding: '1rem' }}>
+      <div style={{ fontSize: 11, color: '#6A6D70', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 600, color }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: '#6A6D70', marginTop: 2 }}>{sub}</div>}
+    </div>
   )
 }
 
@@ -181,11 +184,11 @@ export function Metric({ label, value, color = 'var(--sapTextColor)', sub }) {
 export function Table({ columns, rows, onRowClick }) {
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, fontFamily: 'var(--sapFontFamily)' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, fontFamily: 'inherit' }}>
         <thead>
-          <tr style={{ background: 'var(--sapList_HeaderBackground)', borderBottom: '1px solid var(--sapList_BorderColor)' }}>
+          <tr style={{ background: '#F2F2F2', borderBottom: '2px solid #D9D9D9' }}>
             {columns.map(c => (
-              <th key={c.key} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--sapList_HeaderTextColor)', whiteSpace: 'nowrap' }}>
+              <th key={c.key} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, color: '#32363A', whiteSpace: 'nowrap' }}>
                 {c.label}
               </th>
             ))}
@@ -195,23 +198,19 @@ export function Table({ columns, rows, onRowClick }) {
           {rows.map((row, i) => (
             <tr key={i}
               onClick={() => onRowClick && onRowClick(row)}
-              style={{
-                borderBottom: '1px solid var(--sapList_BorderColor)',
-                cursor: onRowClick ? 'pointer' : 'default',
-                background: 'var(--sapList_Background)',
-              }}
-              onMouseOver={e => onRowClick && (e.currentTarget.style.background = 'var(--sapList_Hover_Background)')}
-              onMouseOut={e => (e.currentTarget.style.background = 'var(--sapList_Background)')}
+              style={{ borderBottom: '1px solid #D9D9D9', cursor: onRowClick ? 'pointer' : 'default', background: '#fff' }}
+              onMouseOver={e => onRowClick && (e.currentTarget.style.background = '#EBF5FE')}
+              onMouseOut={e => (e.currentTarget.style.background = '#fff')}
             >
               {columns.map(c => (
-                <td key={c.key} style={{ padding: '10px 12px', color: 'var(--sapTextColor)' }}>
+                <td key={c.key} style={{ padding: '10px 12px', color: '#32363A' }}>
                   {c.render ? c.render(row[c.key], row) : row[c.key] ?? '—'}
                 </td>
               ))}
             </tr>
           ))}
           {rows.length === 0 && (
-            <tr><td colSpan={columns.length} style={{ padding: 32, textAlign: 'center', color: 'var(--sapContent_LabelColor)' }}>No records found</td></tr>
+            <tr><td colSpan={columns.length} style={{ padding: 32, textAlign: 'center', color: '#6A6D70' }}>No records found</td></tr>
           )}
         </tbody>
       </table>
@@ -223,11 +222,21 @@ export function Table({ columns, rows, onRowClick }) {
 export function SearchableSelect({ options = [], value, onChange, placeholder }) {
   const [open, setOpen]               = useState(false)
   const [search, setSearch]           = useState('')
-  const [dropRect, setDropRect]       = useState(null)
+  const [pos, setPos]                 = useState({ top: 0, left: 0, width: 0, maxH: 200, flipUp: false })
   const [highlighted, setHighlighted] = useState(-1)
-  const ref        = useRef(null)
+  const [mounted, setMounted]         = useState(false)
   const triggerRef = useRef(null)
   const listRef    = useRef(null)
+  const portalEl   = useRef(null)
+
+  // create a stable DOM node for the portal on mount
+  useEffect(() => {
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    portalEl.current = el
+    setMounted(true)
+    return () => { document.body.removeChild(el) }
+  }, [])
 
   const optVal   = o => (o && typeof o === 'object') ? o.value : o
   const optLabel = o => (o && typeof o === 'object') ? o.label : o
@@ -237,124 +246,139 @@ export function SearchableSelect({ options = [], value, onChange, placeholder })
     return m ? optLabel(m) : value
   })()
 
-  useEffect(() => {
-    const onDown  = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-    const onScroll = e => { if (ref.current && ref.current.contains(e.target)) return; setOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('scroll', onScroll, true)
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('scroll', onScroll, true) }
-  }, [])
+  const calcPos = () => {
+    if (!triggerRef.current) return
+    const r     = triggerRef.current.getBoundingClientRect()
+    const GAP   = 4, MAX_H = 280
+    const below = window.innerHeight - r.bottom - GAP
+    const above = r.top - GAP
+    const flipUp = below < 160 && above > below
+    const maxH   = Math.max(80, Math.min(MAX_H, flipUp ? above : below) - GAP)
+    const left   = Math.max(8, Math.min(r.left, window.innerWidth - r.width - 8))
+    const top    = flipUp ? r.top - GAP - maxH : r.bottom + GAP
+    setPos({ top, left, width: r.width, maxH, flipUp })
+  }
 
-  const filtered = options.filter(o => !search.trim() || optLabel(o).toLowerCase().includes(search.toLowerCase()))
+  const openDrop = () => { calcPos(); setOpen(true); setSearch(''); setHighlighted(-1) }
+  const closeDrop = () => { setOpen(false); setSearch(''); setHighlighted(-1) }
+  const selectOpt = opt => { onChange(optVal(opt)); closeDrop(); triggerRef.current?.focus() }
+
+  // close on outside click — checks both trigger and portal node
+  useEffect(() => {
+    if (!open) return
+    const onDown = e => {
+      const inTrigger = triggerRef.current?.contains(e.target)
+      const inPortal  = portalEl.current?.contains(e.target)
+      if (!inTrigger && !inPortal) closeDrop()
+    }
+    const onScroll = () => { if (open) { calcPos() } }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', calcPos)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', calcPos)
+    }
+  }, [open])
+
   useEffect(() => { setHighlighted(-1) }, [search])
   useEffect(() => {
     if (highlighted >= 0 && listRef.current)
       listRef.current.children[highlighted]?.scrollIntoView({ block: 'nearest' })
   }, [highlighted])
 
-  const openDrop  = () => { if (ref.current) setDropRect(ref.current.getBoundingClientRect()); setOpen(true); setSearch(''); setHighlighted(-1) }
-  const closeDrop = () => { setOpen(false); setSearch(''); setHighlighted(-1) }
-  const selectOpt = opt => { onChange(optVal(opt)); closeDrop(); triggerRef.current?.focus() }
-  const handleBlur = e => { if (!ref.current?.contains(e.relatedTarget)) closeDrop() }
+  const filtered = options.filter(o => !search.trim() || optLabel(o).toLowerCase().includes(search.toLowerCase()))
 
   const handleTriggerKey = e => {
-    if (e.key === 'Enter' || e.key === ' ' || (e.key === 'ArrowDown' && e.altKey)) { e.preventDefault(); if (!open) openDrop() }
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') { e.preventDefault(); if (!open) openDrop() }
     if (e.key === 'Escape') closeDrop()
   }
   const handleSearchKey = e => {
-    if (e.key === 'Escape' || (e.key === 'ArrowUp' && e.altKey)) { closeDrop(); triggerRef.current?.focus(); return }
+    if (e.key === 'Escape') { closeDrop(); triggerRef.current?.focus(); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); setHighlighted(h => Math.min(h + 1, filtered.length - 1)); return }
     if (e.key === 'ArrowUp')   { e.preventDefault(); setHighlighted(h => h <= 0 ? -1 : h - 1); return }
-    if (e.key === 'Enter' || (e.key === ' ' && highlighted >= 0)) {
+    if (e.key === 'Enter') {
       e.preventDefault()
       if (highlighted >= 0 && filtered[highlighted]) selectOpt(filtered[highlighted])
-      else if (e.key === 'Enter' && filtered.length === 1) selectOpt(filtered[0])
+      else if (filtered.length === 1) selectOpt(filtered[0])
     }
   }
 
   const triggerStyle = {
     width: '100%', boxSizing: 'border-box', fontSize: 13,
-    padding: '7px 10px', borderRadius: 4,
-    border: `1px solid ${open ? 'var(--sapField_Focus_BorderColor)' : 'var(--sapField_BorderColor)'}`,
-    background: 'var(--sapField_Background)', color: value ? 'var(--sapTextColor)' : 'var(--sapField_PlaceholderTextColor)',
+    padding: '7px 10px', borderRadius: 6,
+    border: `1px solid ${open ? '#185FA5' : '#d1d5db'}`,
+    boxShadow: open ? '0 0 0 2px rgba(24,95,165,0.18)' : 'none',
+    background: '#fff', color: value ? '#111827' : '#9ca3af',
     cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    userSelect: 'none', outline: 'none', fontFamily: 'var(--sapFontFamily)',
+    userSelect: 'none', outline: 'none', fontFamily: 'inherit',
   }
 
+  const dropdown = open ? (
+    <div style={{
+      position: 'fixed', top: pos.top, left: pos.left, width: pos.width,
+      background: '#fff', border: '1px solid #d1d5db',
+      borderRadius: 6, zIndex: 99999, boxShadow: '0 8px 24px rgba(0,0,0,0.14)',
+      display: 'flex', flexDirection: 'column', maxHeight: pos.maxH,
+    }}>
+      <div style={{ padding: '6px 8px', borderBottom: '1px solid #e5e7eb', flexShrink: 0 }}>
+        <input autoFocus value={search} onChange={e => setSearch(e.target.value)}
+          onKeyDown={handleSearchKey}
+          placeholder="Type to search or ↑↓ to navigate…"
+          style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '5px 8px',
+            borderRadius: 4, border: '1px solid #d1d5db', fontFamily: 'inherit',
+            background: '#fff', outline: 'none' }} />
+      </div>
+      <div onMouseDown={e => e.preventDefault()} onClick={() => { onChange(''); closeDrop() }}
+        style={{ padding: '7px 12px', fontSize: 12, color: '#6b7280',
+          cursor: 'pointer', borderBottom: '1px solid #e5e7eb', flexShrink: 0 }}
+        onMouseEnter={e => e.currentTarget.style.background = '#f3f4f6'}
+        onMouseLeave={e => e.currentTarget.style.background = '#fff'}>
+        — Clear selection —
+      </div>
+      <div ref={listRef} style={{ overflowY: 'auto', flex: 1 }}>
+        {filtered.length === 0
+          ? <div style={{ padding: '10px 12px', fontSize: 12, color: '#9ca3af', textAlign: 'center' }}>No matches found</div>
+          : filtered.map((opt, idx) => {
+              const v = optVal(opt), l = optLabel(opt)
+              const isSel = value === v, isHl = idx === highlighted
+              return (
+                <div key={v}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => selectOpt(opt)}
+                  onMouseEnter={() => setHighlighted(idx)}
+                  onMouseLeave={() => setHighlighted(-1)}
+                  style={{ padding: '8px 12px', fontSize: 12, cursor: 'pointer',
+                    borderBottom: '1px solid #f3f4f6',
+                    background: isHl ? '#EBF4FF' : isSel ? '#dbeafe' : '#fff',
+                    color: isSel ? '#1d4ed8' : '#111827',
+                    fontWeight: isSel ? 600 : 400 }}>
+                  {l}
+                </div>
+              )
+            })
+        }
+      </div>
+      <div style={{ padding: '4px 8px', borderTop: '1px solid #e5e7eb',
+        fontSize: 10, color: '#9ca3af', textAlign: 'right', flexShrink: 0 }}>
+        {filtered.length} of {options.length} options
+      </div>
+    </div>
+  ) : null
+
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
+    <div style={{ position: 'relative' }}>
       <div ref={triggerRef} tabIndex={0}
         onClick={() => open ? closeDrop() : openDrop()}
-        onKeyDown={handleTriggerKey} onBlur={handleBlur}
+        onKeyDown={handleTriggerKey}
         style={triggerStyle}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {selectedLabel || placeholder || '— Select —'}
         </span>
-        <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--sapContent_LabelColor)', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ marginLeft: 8, fontSize: 10, color: '#6b7280', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </div>
-
-      {open && dropRect && (() => {
-        const MAX_H   = 280
-        const GAP     = 4
-        const vw      = window.innerWidth
-        const vh      = window.innerHeight
-        const below   = vh - dropRect.bottom - GAP
-        const above   = dropRect.top - GAP
-        const flipUp  = below < 160 && above > below
-        const maxH    = Math.max(80, Math.min(MAX_H, flipUp ? above : below) - GAP)
-        const top     = flipUp ? dropRect.top - GAP - maxH : dropRect.bottom + GAP
-        const rawLeft = dropRect.left
-        const left    = Math.max(8, Math.min(rawLeft, vw - dropRect.width - 8))
-        return (
-          <div style={{ position: 'fixed', top, left, width: dropRect.width,
-            background: 'var(--sapList_Background)', border: '1px solid var(--sapList_BorderColor)',
-            borderRadius: 4, zIndex: 9999, boxShadow: 'var(--sapContent_Shadow2)',
-            display: 'flex', flexDirection: 'column', maxHeight: maxH }}>
-            <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--sapList_BorderColor)', flexShrink: 0 }}>
-              <input autoFocus value={search} onChange={e => setSearch(e.target.value)}
-                onKeyDown={handleSearchKey} onBlur={handleBlur}
-                placeholder="Type to search or ↑↓ to navigate…"
-                onClick={e => e.stopPropagation()}
-                style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '5px 8px',
-                  borderRadius: 4, border: '1px solid var(--sapField_BorderColor)',
-                  fontFamily: 'var(--sapFontFamily)', background: 'var(--sapField_Background)' }} />
-            </div>
-            <div onClick={() => { onChange(''); closeDrop() }}
-              onMouseDown={e => e.preventDefault()}
-              style={{ padding: '7px 12px', fontSize: 12, color: 'var(--sapContent_LabelColor)',
-                cursor: 'pointer', borderBottom: '1px solid var(--sapList_BorderColor)', flexShrink: 0 }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--sapList_Hover_Background)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'var(--sapList_Background)'}>
-              — Clear selection —
-            </div>
-            <div ref={listRef} style={{ overflowY: 'auto', flex: 1 }}>
-              {filtered.length === 0
-                ? <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--sapContent_LabelColor)', textAlign: 'center' }}>No matches found</div>
-                : filtered.map((opt, idx) => {
-                    const v = optVal(opt), l = optLabel(opt)
-                    const isSel = value === v, isHl = idx === highlighted
-                    return (
-                      <div key={v} onClick={() => selectOpt(opt)}
-                        onMouseDown={e => e.preventDefault()}
-                        onMouseEnter={() => setHighlighted(idx)} onMouseLeave={() => setHighlighted(-1)}
-                        style={{ padding: '8px 12px', fontSize: 12, cursor: 'pointer',
-                          borderBottom: '1px solid var(--sapList_BorderColor)',
-                          background: isHl ? 'var(--sapList_Hover_Background)' : isSel ? 'var(--sapList_SelectionBackgroundColor)' : 'var(--sapList_Background)',
-                          color: isSel ? 'var(--sapList_SelectionBorderColor)' : 'var(--sapTextColor)',
-                          fontWeight: isSel ? 600 : 400 }}>
-                        {l}
-                      </div>
-                    )
-                  })
-              }
-            </div>
-            <div style={{ padding: '4px 8px', borderTop: '1px solid var(--sapList_BorderColor)',
-              fontSize: 10, color: 'var(--sapContent_LabelColor)', textAlign: 'right', flexShrink: 0 }}>
-              {filtered.length} of {options.length} options
-            </div>
-          </div>
-        )
-      })()}
+      {mounted && portalEl.current && createPortal(dropdown, portalEl.current)}
     </div>
   )
 }
@@ -378,10 +402,10 @@ export function Modal({ title, onClose, children, width = 560 }) {
           borderRadius: 8,
           width: Math.min(width, window.innerWidth * 0.95),
           maxHeight: '90vh',
-          overflowY: 'auto',
           boxShadow: '0 8px 40px rgba(0,0,0,0.22)',
           display: 'flex',
           flexDirection: 'column',
+          overflow: 'hidden',
         }}
       >
         {/* Header */}
@@ -397,8 +421,8 @@ export function Modal({ title, onClose, children, width = 560 }) {
             cursor: 'pointer', color: '#6A6D70', lineHeight: 1, padding: '2px 6px',
           }}>✕</button>
         </div>
-        {/* Body */}
-        <div style={{ padding: '16px 20px', flex: 1 }}>
+        {/* Body — scrolls independently so fixed-position portals are not clipped */}
+        <div style={{ padding: '16px 20px', flex: 1, overflowY: 'auto' }}>
           {children}
         </div>
       </div>
@@ -410,7 +434,13 @@ export function Modal({ title, onClose, children, width = 560 }) {
 export function Spinner() {
   return (
     <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
-      <BusyIndicator active size="Medium" />
+      <div style={{
+        width: 32, height: 32, borderRadius: '50%',
+        border: '3px solid #D9D9D9',
+        borderTopColor: '#0070F2',
+        animation: 'spin 0.7s linear infinite',
+      }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 }
@@ -482,7 +512,7 @@ export function WorkflowBar({ stage, completed, levels, current_step }) {
 export function SectionHead({ title, action }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-      <Title level="H5" style={{ color: 'var(--sapContent_LabelColor)', textTransform: 'uppercase', letterSpacing: 0.8 }}>{title}</Title>
+      <span style={{ fontSize: 12, fontWeight: 700, color: '#6A6D70', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{title}</span>
       {action}
     </div>
   )
@@ -491,9 +521,9 @@ export function SectionHead({ title, action }) {
 // ─── Empty state ──────────────────────────────────────────────────────────────
 export function Empty({ message = 'No records found.' }) {
   return (
-    <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--sapContent_LabelColor)', fontSize: 14 }}>
+    <div style={{ textAlign: 'center', padding: '48px 0', color: '#6A6D70', fontSize: 14 }}>
       <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
-      <Text>{message}</Text>
+      <div>{message}</div>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import { authAPI } from '../api'
+import { idleTimedOut } from './idleFlag'
 
 const AuthContext = createContext(null)
 
@@ -7,26 +8,47 @@ export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
   const [loading, setLoading] = useState(true)  // true until we've checked localStorage
 
-  // On mount: read from localStorage and verify token is still valid
+  // On mount: read token from localStorage, then VERIFY it with the backend.
+  // If the token is missing, expired, or rejected (401/403) → force logout.
+  // Until verification completes loading stays true so no page flashes.
   useEffect(() => {
-    const token    = localStorage.getItem('dms_token')
-    const stored   = localStorage.getItem('dms_user')
+    const token  = localStorage.getItem('dms_token')
+    const stored = localStorage.getItem('dms_user')
 
-    if (token && stored) {
-      try {
-        const parsedUser = JSON.parse(stored)
-        setUser(parsedUser)
-        // Optionally verify token with backend
-        // authAPI.me().catch(() => { logout() })
-      } catch {
+    if (!token || !stored) {
+      // No credentials at all — stay logged out
+      setLoading(false)
+      return
+    }
+
+    let parsedUser = null
+    try { parsedUser = JSON.parse(stored) } catch {}
+
+    if (!parsedUser) {
+      localStorage.removeItem('dms_token')
+      localStorage.removeItem('dms_user')
+      setLoading(false)
+      return
+    }
+
+    // Optimistically set user so the app has data while we verify,
+    // but keep loading=true so RequireAuth waits for confirmation.
+    authAPI.me()
+      .then(res => {
+        const freshUser = res.data
+        setUser(freshUser)
+        localStorage.setItem('dms_user', JSON.stringify(freshUser))
+      })
+      .catch(() => {
+        // Token invalid / expired / 403 — clear everything and go to login
         localStorage.removeItem('dms_token')
         localStorage.removeItem('dms_user')
-      }
-    }
-    setLoading(false)
+        setUser(null)
+      })
+      .finally(() => setLoading(false))
   }, [])
 
-  // Periodic sync with backend every 60 seconds
+  // Periodic sync every 60 seconds — if token is rejected, force logout
   useEffect(() => {
     if (!user) return
 
@@ -37,18 +59,24 @@ export function AuthProvider({ children }) {
         setUser(updatedUser)
         localStorage.setItem('dms_user', JSON.stringify(updatedUser))
       } catch (err) {
-        // Silently fail if sync fails (network issue, token expired, etc)
-        console.debug('User sync failed:', err)
+        const status = err.response?.status
+        if (status === 401) {
+          // Token expired during the session — force logout.
+          // If idle modal is showing, skip the redirect and let the modal handle re-login.
+          localStorage.removeItem('dms_token')
+          localStorage.removeItem('dms_user')
+          setUser(null)
+          if (!idleTimedOut) window.location.href = '/login'
+        }
+        // 403 = permission denied for a specific resource, not token expiry — ignore.
+        // Network errors (no status) — silently ignore, try again next tick.
       }
     }
 
-    // Sync immediately on mount
     syncUser()
-
-    // Then sync every 60 seconds
     const interval = setInterval(syncUser, 60000)
     return () => clearInterval(interval)
-  }, [user])
+  }, [user?.id])  // only restart timer when user identity changes, not on every re-render
 
   async function login(email, password, gateToken) {
     try {

@@ -2266,9 +2266,343 @@ function ApproverConfigPanel({ toast }) {
 }
 
 // ─── Main Admin page ──────────────────────────────────────────────────────────
+// ─── Folder Access Panel ──────────────────────────────────────────────────────
+function FolderAccessPanel({ toast }) {
+  const [folders, setFolders] = useState([])
+  const [users, setUsers]     = useState([])
+  const [requests, setRequests] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [perms, setPerms]     = useState([])
+  const [loading, setLoading] = useState(true)
+  const [tab, setTab]         = useState('permissions') // 'permissions' | 'requests'
+  const [grantUser, setGrantUser]   = useState('')
+  const [grantPerm, setGrantPerm]   = useState('VIEW')
+  const [managerSearch, setManagerSearch] = useState('')
+  const [saving, setSaving]   = useState(false)
+  const [decideNote, setDecideNote] = useState('')
+  const [decidingId, setDecidingId] = useState(null)
+
+  const flattenTree = (nodes, depth = 0, out = []) => {
+    for (const n of nodes || []) {
+      out.push({ ...n, _depth: depth })
+      flattenTree(n.children, depth + 1, out)
+    }
+    return out
+  }
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [treeRes, usersRes, reqRes] = await Promise.all([
+        libraryAPI.tree(),
+        adminAPI.listUsers({ page_size: 500 }),
+        libraryAPI.allAccessRequests(),
+      ])
+      const flat = flattenTree(treeRes.data || [])
+      setFolders(flat)
+      setUsers(usersRes.data?.users || usersRes.data || [])
+      setRequests(reqRes.data || [])
+    } catch { /* silent */ }
+    finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { loadAll() }, [loadAll])
+
+  const loadPerms = useCallback(async (folderId) => {
+    try {
+      const r = await libraryAPI.getFolderPermissions(folderId)
+      setPerms(r.data || [])
+    } catch { setPerms([]) }
+  }, [])
+
+  async function selectFolder(f) {
+    setSelected(f)
+    setGrantUser('')
+    setManagerSearch(f.folder_manager_name || '')
+    await loadPerms(f.id)
+  }
+
+  async function grant(e) {
+    e.preventDefault()
+    if (!selected || !grantUser) return
+    setSaving(true)
+    try {
+      await libraryAPI.grantFolderPermission(selected.id, { user_id: Number(grantUser), permission: grantPerm })
+      toast({ msg: 'Permission granted', type: 'success' })
+      await loadPerms(selected.id)
+      setGrantUser('')
+    } catch (err) {
+      toast({ msg: err.response?.data?.error || 'Failed', type: 'error' })
+    } finally { setSaving(false) }
+  }
+
+  async function revoke(userId) {
+    if (!selected) return
+    if (!window.confirm('Revoke this user\'s access?')) return
+    try {
+      await libraryAPI.revokeFolderPermission(selected.id, userId)
+      toast({ msg: 'Access revoked', type: 'success' })
+      await loadPerms(selected.id)
+    } catch (err) {
+      toast({ msg: err.response?.data?.error || 'Failed', type: 'error' })
+    }
+  }
+
+  async function setManager(userId) {
+    if (!selected) return
+    try {
+      await libraryAPI.updateFolder(selected.id, { folder_manager_id: userId || null })
+      toast({ msg: 'Folder manager updated', type: 'success' })
+      await loadAll()
+    } catch (err) {
+      toast({ msg: err.response?.data?.error || 'Failed', type: 'error' })
+    }
+  }
+
+  async function decide(reqId, action) {
+    try {
+      await libraryAPI.decideAccessRequest(reqId, { action, note: decideNote.trim() })
+      toast({ msg: `Request ${action}d`, type: 'success' })
+      setDecidingId(null); setDecideNote('')
+      await loadAll()
+      if (selected) await loadPerms(selected.id)
+    } catch (err) {
+      toast({ msg: err.response?.data?.error || 'Failed', type: 'error' })
+    }
+  }
+
+  const STATUS_STYLE = {
+    pending:  { background:'#fef3c7', color:'#92400e' },
+    approved: { background:'#d1fae5', color:'#065f46' },
+    rejected: { background:'#fee2e2', color:'#991b1b' },
+  }
+
+  const pendingCount = requests.filter(r => r.status === 'pending').length
+
+  if (loading) return <div style={{ padding:40, textAlign:'center', color:'#94a3b8' }}>Loading…</div>
+
+  return (
+    <div style={{ display:'flex', gap:16, height:'70vh' }}>
+
+      {/* Left: folder list */}
+      <div style={{ width:260, flexShrink:0, background:'#fff', borderRadius:10,
+        border:`1px solid ${C.border}`, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ padding:'12px 14px', borderBottom:`1px solid ${C.border}`,
+          fontWeight:700, fontSize:13, color:'#1e293b' }}>
+          Folders ({folders.length})
+        </div>
+        <div style={{ flex:1, overflowY:'auto' }}>
+          {folders.map(f => (
+            <div key={f.id}
+              onClick={() => selectFolder(f)}
+              style={{
+                padding:`8px ${10 + f._depth * 14}px`, cursor:'pointer', fontSize:13,
+                background: selected?.id === f.id ? C.lightBlue : 'transparent',
+                color: selected?.id === f.id ? C.blue : '#1e293b',
+                borderLeft: selected?.id === f.id ? `3px solid ${C.blue}` : '3px solid transparent',
+                display:'flex', alignItems:'center', gap:6,
+              }}
+              onMouseEnter={e => { if (selected?.id !== f.id) e.currentTarget.style.background = '#f8fafc' }}
+              onMouseLeave={e => { if (selected?.id !== f.id) e.currentTarget.style.background = 'transparent' }}
+            >
+              <span style={{ fontSize:14 }}>📁</span>
+              <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</span>
+              {f.folder_manager_name && (
+                <span title={`Manager: ${f.folder_manager_name}`}
+                  style={{ fontSize:9, background:'#eff6ff', color:C.blue, borderRadius:99,
+                    padding:'1px 5px', fontWeight:600, flexShrink:0 }}>MGR</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Right: permission management */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', gap:12, minWidth:0 }}>
+
+        {/* Access Requests card */}
+        <div style={{ background:'#fff', borderRadius:10, border:`1px solid ${C.border}`, overflow:'hidden' }}>
+          <div style={{ padding:'10px 16px', borderBottom:`1px solid ${C.border}`,
+            display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <span style={{ fontWeight:700, fontSize:13 }}>
+              Access Requests
+              {pendingCount > 0 && (
+                <span style={{ marginLeft:8, fontSize:11, background:'#fef3c7', color:'#92400e',
+                  borderRadius:99, padding:'2px 8px', fontWeight:700 }}>{pendingCount} pending</span>
+              )}
+            </span>
+            <div style={{ display:'flex', gap:8 }}>
+              {['all', 'pending', 'approved', 'rejected'].map(s => (
+                <button key={s} onClick={() => setTab(s === 'all' ? 'requests' : s)}
+                  style={{ padding:'4px 10px', fontSize:11, borderRadius:99, cursor:'pointer',
+                    border:`1px solid ${C.border}`, background: tab === s ? C.lightBlue : '#fff',
+                    color: tab === s ? C.blue : '#6b7280', fontWeight: tab === s ? 700 : 400 }}>
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ maxHeight:220, overflowY:'auto' }}>
+            {requests
+              .filter(r => tab === 'requests' ? true : r.status === tab)
+              .map(r => (
+              <div key={r.id} style={{ padding:'10px 16px', borderBottom:`1px solid #f1f5f9`,
+                display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <div style={{ flex:1, minWidth:180 }}>
+                  <div style={{ fontSize:13, fontWeight:600 }}>{r.requester_name}</div>
+                  <div style={{ fontSize:11, color:'#64748b' }}>{r.folder_name} · {r.permission}</div>
+                  {r.reason && <div style={{ fontSize:11, color:'#94a3b8', fontStyle:'italic' }}>"{r.reason}"</div>}
+                </div>
+                <span style={{ fontSize:11, padding:'2px 8px', borderRadius:99, fontWeight:700,
+                  ...STATUS_STYLE[r.status] }}>{r.status}</span>
+                {r.status === 'pending' && (
+                  decidingId === r.id ? (
+                    <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                      <input value={decideNote} onChange={e => setDecideNote(e.target.value)}
+                        placeholder="Note…"
+                        style={{ padding:'4px 8px', fontSize:12, border:`1px solid ${C.border}`,
+                          borderRadius:6, width:120 }} />
+                      <button onClick={() => decide(r.id, 'approve')}
+                        style={{ padding:'4px 10px', background:'#10b981', color:'#fff',
+                          border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:600 }}>Approve</button>
+                      <button onClick={() => decide(r.id, 'reject')}
+                        style={{ padding:'4px 10px', background:'#ef4444', color:'#fff',
+                          border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:600 }}>Reject</button>
+                      <button onClick={() => { setDecidingId(null); setDecideNote('') }}
+                        style={{ padding:'4px 8px', border:`1px solid ${C.border}`, background:'#fff',
+                          borderRadius:6, cursor:'pointer', fontSize:12 }}>×</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setDecidingId(r.id)}
+                      style={{ padding:'4px 12px', border:`1px solid ${C.blue}`, background:C.lightBlue,
+                        color:C.blue, borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:600 }}>
+                      Review
+                    </button>
+                  )
+                )}
+              </div>
+            ))}
+            {requests.filter(r => tab === 'requests' ? true : r.status === tab).length === 0 && (
+              <div style={{ padding:20, textAlign:'center', color:'#94a3b8', fontSize:13 }}>No requests</div>
+            )}
+          </div>
+        </div>
+
+        {/* Folder permissions card */}
+        {selected ? (
+          <div style={{ background:'#fff', borderRadius:10, border:`1px solid ${C.border}`,
+            flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+            <div style={{ padding:'10px 16px', borderBottom:`1px solid ${C.border}`,
+              fontWeight:700, fontSize:13, display:'flex', alignItems:'center', gap:8 }}>
+              <span>📁 {selected.name}</span>
+              <span style={{ fontSize:12, color:'#64748b', fontWeight:400 }}>— Permissions</span>
+            </div>
+
+            {/* Manager assignment */}
+            <div style={{ padding:'10px 16px', borderBottom:`1px solid #f1f5f9`,
+              display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+              <span style={{ fontSize:12, fontWeight:600, color:'#374151', flexShrink:0 }}>Folder Manager:</span>
+              <select
+                value={selected.folder_manager_id || ''}
+                onChange={e => setManager(e.target.value ? Number(e.target.value) : null)}
+                style={{ padding:'5px 8px', fontSize:12, border:`1px solid ${C.border}`,
+                  borderRadius:6, background:'#fff', flex:1, maxWidth:260 }}>
+                <option value="">— Unassigned —</option>
+                {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.employee_id || u.email})</option>)}
+              </select>
+              <span style={{ fontSize:11, color:'#64748b' }}>
+                This person receives access requests for this folder
+              </span>
+            </div>
+
+            {/* Grant permission */}
+            <form onSubmit={grant} style={{ padding:'10px 16px', borderBottom:`1px solid #f1f5f9`,
+              display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <select value={grantUser} onChange={e => setGrantUser(e.target.value)}
+                style={{ flex:1, minWidth:180, padding:'6px 8px', fontSize:12,
+                  border:`1px solid ${C.border}`, borderRadius:6, background:'#fff' }}>
+                <option value="">— Select user to grant access —</option>
+                {users.filter(u => !perms.some(p => p.user_id === u.id)).map(u => (
+                  <option key={u.id} value={u.id}>{u.name} ({u.employee_id || u.email})</option>
+                ))}
+              </select>
+              <select value={grantPerm} onChange={e => setGrantPerm(e.target.value)}
+                style={{ padding:'6px 8px', fontSize:12, border:`1px solid ${C.border}`, borderRadius:6, background:'#fff' }}>
+                <option value="VIEW">VIEW</option>
+                <option value="UPLOAD">UPLOAD</option>
+              </select>
+              <button type="submit" disabled={saving || !grantUser}
+                style={{ padding:'6px 14px', background: (saving || !grantUser) ? '#9ca3af' : C.blue,
+                  color:'#fff', border:'none', borderRadius:6, cursor: (!grantUser || saving) ? 'not-allowed' : 'pointer',
+                  fontSize:12, fontWeight:600 }}>
+                Grant
+              </button>
+            </form>
+
+            {/* Existing permissions list */}
+            <div style={{ flex:1, overflowY:'auto' }}>
+              {perms.length === 0 ? (
+                <div style={{ padding:24, textAlign:'center', color:'#94a3b8', fontSize:13 }}>
+                  No permissions granted yet
+                </div>
+              ) : (
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:'#f8fafc' }}>
+                      {['User','Email','Permission','Granted By','Granted At',''].map(h => (
+                        <th key={h} style={{ padding:'8px 12px', textAlign:'left', fontWeight:600,
+                          fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:'.04em',
+                          borderBottom:`1px solid ${C.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {perms.map(p => (
+                      <tr key={p.id} onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        <td style={{ padding:'8px 12px', fontWeight:600 }}>{p.user_name}</td>
+                        <td style={{ padding:'8px 12px', color:'#64748b', fontSize:12 }}>{p.user_email}</td>
+                        <td style={{ padding:'8px 12px' }}>
+                          <span style={{ fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:99,
+                            background: p.permission === 'UPLOAD' ? '#d1fae5' : '#eff6ff',
+                            color: p.permission === 'UPLOAD' ? '#065f46' : C.blue }}>
+                            {p.permission}
+                          </span>
+                        </td>
+                        <td style={{ padding:'8px 12px', color:'#64748b', fontSize:12 }}>{p.granted_by || '—'}</td>
+                        <td style={{ padding:'8px 12px', color:'#94a3b8', fontSize:11 }}>{fmtDate(p.granted_at)}</td>
+                        <td style={{ padding:'8px 12px' }}>
+                          <button onClick={() => revoke(p.user_id)}
+                            style={{ padding:'3px 10px', background:'#fee2e2', color:'#991b1b',
+                              border:'none', borderRadius:6, cursor:'pointer', fontSize:11, fontWeight:600 }}>
+                            Revoke
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ flex:1, background:'#fff', borderRadius:10, border:`1px solid ${C.border}`,
+            display:'flex', alignItems:'center', justifyContent:'center', color:'#94a3b8' }}>
+            <div style={{ textAlign:'center' }}>
+              <div style={{ fontSize:40, marginBottom:8 }}>📁</div>
+              <div>Select a folder to manage its permissions</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const TABS = [
   { id:'users',    label:'Users' },
   { id:'doctypes', label:'Document Types' },
+  { id:'folders',  label:'Folder Access' },
   { id:'cover',    label:'Cover Page' },
   { id:'approver', label:'Approver API' },
   { id:'config',   label:'System Config' },
@@ -2325,6 +2659,7 @@ export default function Admin() {
 
       {tab==='users'    && <UsersGrid             toast={showToast} />}
       {tab==='doctypes' && <DocTypesGrid          toast={showToast} />}
+      {tab==='folders'  && <FolderAccessPanel     toast={showToast} />}
       {tab==='cover'    && <CoverPageManager      toast={showToast} />}
       {tab==='approver' && <ApproverConfigPanel   toast={showToast} />}
       {tab==='config'   && <SystemConfigPanel     toast={showToast} />}
