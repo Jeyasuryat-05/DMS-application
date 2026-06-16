@@ -1,5 +1,5 @@
 from django.urls import path
-from api.views import auth_views, document_views, workflow_views, report_views, admin_views, alert_views, library_views
+from api.views import auth_views, document_views, workflow_views, report_views, admin_views, alert_views, library_views, sap_views
 
 urlpatterns = [
     # ── Health ────────────────────────────────────────────────────────────────
@@ -116,4 +116,12 @@ urlpatterns = [
     path('library/access-requests/all', library_views.all_access_requests),
     path('library/access-requests/<int:request_id>/decide', library_views.decide_access_request),
     path('library/my-upload-doc-types', library_views.my_upload_doc_types),
+
+    # ── SAP OData ─────────────────────────────────────────────────────────────
+    path('sap/status',                    sap_views.sap_status),
+    path('sap/documents',                 sap_views.sap_documents),
+    path('sap/push/<int:doc_id>',         sap_views.sap_push_document),
+    path('sap/test-push',                 sap_views.sap_test_push),
+    path('sap/metadata',                  sap_views.sap_metadata),
+    path('sap/validate',                  sap_views.sap_validate_doc_number),
 ]

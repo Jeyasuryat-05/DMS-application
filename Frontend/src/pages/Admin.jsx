@@ -9,7 +9,7 @@
  *  - CSV export
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { adminAPI, authAPI, libraryAPI } from '../api'
+import { adminAPI, authAPI, libraryAPI, sapAPI } from '../api'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { fmtDate, fmtDateTime } from '../utils/dates'
 
@@ -1342,6 +1342,10 @@ function SystemConfigPanel({ toast }) {
   const [form, setForm]     = useState({})
   const [saving, setSaving] = useState(false)
   const [metaXml, setMetaXml] = useState('')
+  const [sapTesting, setSapTesting] = useState(false)
+  const [sapTestResult, setSapTestResult] = useState(null)
+  const [sapMeta, setSapMeta] = useState(null)
+  const [sapMetaLoading, setSapMetaLoading] = useState(false)
 
   useEffect(() => {
     adminAPI.getConfig().then(r => { setCfg(r.data); setForm(r.data) })
@@ -1364,6 +1368,35 @@ function SystemConfigPanel({ toast }) {
       const res = await authAPI.ssoMetadata()
       setMetaXml(res.data)
     } catch { toast('Could not load metadata','error') }
+  }
+
+  async function fetchSapMetadata() {
+    setSapMetaLoading(true)
+    setSapMeta(null)
+    try {
+      const res = await sapAPI.metadata()
+      setSapMeta(res.data)
+    } catch (e) {
+      setSapMeta({ error: e.response?.data?.error || e.message || 'Metadata fetch failed' })
+    } finally {
+      setSapMetaLoading(false)
+    }
+  }
+
+  async function runSapTestPush() {
+    setSapTesting(true)
+    setSapTestResult(null)
+    try {
+      const res = await sapAPI.testPush()
+      setSapTestResult({ ok: true, data: res.data })
+      toast('SAP test push succeeded', 'success')
+    } catch (e) {
+      const msg = e.response?.data?.error || e.message || 'SAP test push failed'
+      setSapTestResult({ ok: false, error: msg })
+      toast(msg, 'error')
+    } finally {
+      setSapTesting(false)
+    }
   }
 
   if (!cfg) return <div style={{padding:32,textAlign:'center',color:C.gray}}>Loading…</div>
@@ -1515,6 +1548,84 @@ function SystemConfigPanel({ toast }) {
             <input value={form.app_org||''} onChange={e=>set('app_org',e.target.value)} style={inputStyle} />
           </div>
         </div>
+      </div>
+
+      {/* ── SAP OData Test Push ── */}
+      <div style={sectionStyle}>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
+          <div style={{width:40,height:24,background:'#1a6e3c',borderRadius:5,display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <span style={{color:'#fff',fontSize:10,fontWeight:700}}>DMS</span>
+          </div>
+          <div>
+            <div style={{fontWeight:700,fontSize:15}}>SAP OData Connection Test</div>
+            <div style={{fontSize:12,color:C.gray}}>
+              Fire the exact <code>DMSDocumentRequest</code> sample payload to SAP and check the response.
+            </div>
+          </div>
+        </div>
+
+        <div style={{background:'#f0f7ff',border:`1px solid #bfdbfe`,borderRadius:8,padding:'10px 14px',marginBottom:12,fontSize:12,color:C.blue}}>
+          <strong>Payload:</strong> IvDocumenttype=TDS · IvFilename=testfile.pdf · IvStoragecategory=DMS_C1_ST · Statusextern=30 · IvFilecontent=(base64)
+        </div>
+
+        <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:10}}>
+          <GBtn
+            label={sapTesting ? 'Sending…' : 'Trigger SAP Test Push'}
+            onClick={runSapTestPush}
+            disabled={sapTesting}
+            color={C.green}
+          />
+          <GBtn
+            label={sapMetaLoading ? 'Fetching…' : 'Fetch SAP $metadata'}
+            onClick={fetchSapMetadata}
+            disabled={sapMetaLoading}
+            color={C.accent}
+          />
+          {sapTestResult && (
+            <div style={{
+              padding:'6px 14px', borderRadius:7, fontSize:12, fontWeight:600,
+              background: sapTestResult.ok ? C.lightGreen : C.lightRed,
+              color: sapTestResult.ok ? C.green : C.red,
+              border:`1px solid ${sapTestResult.ok ? C.green : C.red}`,
+            }}>
+              {sapTestResult.ok
+                ? `SAP responded — EvDocnumber: ${sapTestResult.data?.sap_response?.EvDocnumber || '(see logs)'}`
+                : sapTestResult.error}
+            </div>
+          )}
+        </div>
+
+        {sapTestResult?.data && (
+          <pre style={{marginTop:6,fontSize:11,background:'#f8fafc',padding:10,borderRadius:6,
+            overflow:'auto',maxHeight:140,border:`1px solid ${C.border}`}}>
+            {JSON.stringify(sapTestResult.data, null, 2)}
+          </pre>
+        )}
+
+        {sapMeta && (
+          <div style={{marginTop:10}}>
+            {sapMeta.error ? (
+              <div style={{padding:'6px 12px',borderRadius:7,fontSize:12,
+                background:C.lightRed,color:C.red,border:`1px solid ${C.red}`}}>
+                {sapMeta.error}
+              </div>
+            ) : (
+              <div>
+                <div style={{fontSize:12,fontWeight:600,color:C.accent,marginBottom:4}}>
+                  SAP $metadata from: <code style={{fontSize:11}}>{sapMeta.metadata_url}</code>
+                </div>
+                <div style={{fontSize:11,color:C.gray,marginBottom:6}}>
+                  Look for <strong>FunctionImport</strong> elements — the <code>Name</code> attribute
+                  is the endpoint to use in the SAP OData URL.
+                </div>
+                <pre style={{fontSize:10,background:'#f8fafc',padding:10,borderRadius:6,
+                  overflow:'auto',maxHeight:240,border:`1px solid ${C.border}`,whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+                  {sapMeta.content}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <GBtn label={saving?'Saving…':'Save All Configuration'} onClick={save} disabled={saving} color={C.blue} />

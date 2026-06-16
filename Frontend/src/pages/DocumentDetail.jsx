@@ -363,8 +363,6 @@ export default function DocumentDetail() {
   const [showRefModal, setShowRefModal] = useState(false)
   const [showShareModal, setShowShareModal] = useState(false)
   const [showWfModal, setShowWfModal]       = useState(false)
-  const [wfPassword, setWfPassword]         = useState('')
-  const [wfPasswordError, setWfPasswordError] = useState('')
   const [checklistUploading, setChecklistUploading] = useState({})  // taskId -> bool
   const [checklistFiles, setChecklistFiles]         = useState({})  // taskId -> file
   const [shareLink, setShareLink] = useState(null)
@@ -418,23 +416,17 @@ export default function DocumentDetail() {
   }
 
   async function handleWfAction(action) {
-    setWfPasswordError('')
     try {
       if (action === 'return') {
         await workflowAPI.return(id, { action: 'return', note: wfNote })
       } else {
         const backendAction = action === 'advance' ? 'approve' : action
-        await workflowAPI.action(id, { action: backendAction, note: wfNote, password: wfPassword })
+        await workflowAPI.action(id, { action: backendAction, note: wfNote })
       }
-      setWfNote(''); setWfPassword(''); setWfPasswordError(''); setWfAction(null)
+      setWfNote(''); setWfAction(null)
       refresh()
     } catch (e) {
-      const msg = e.response?.data?.detail || 'Action failed'
-      if (msg.toLowerCase().includes('password') || msg.toLowerCase().includes('incorrect')) {
-        setWfPasswordError(msg)
-      } else {
-        setWfPasswordError(msg)
-      }
+      alert(e.response?.data?.error || e.response?.data?.detail || 'Action failed')
     }
   }
 
@@ -1790,7 +1782,7 @@ export default function DocumentDetail() {
                       title={
                         myPendingTask.level?.checklist_required === true && !!myPendingTask.level?.checklist_template_name && !myPendingTask.checklist_done
                           ? 'You must submit the completed checklist before you can approve.'
-                          : 'Approve this document at your assigned level. Requires your login password as a digital signature. If all assignees at this step approve, the document advances to the next stage.'
+                          : 'Approve this document at your assigned level. If all assignees at this step approve, the document advances to the next stage.'
                       }
                       style={{
                         padding: '9px 20px', borderRadius: 8, border: 'none',
@@ -2286,7 +2278,7 @@ export default function DocumentDetail() {
             wfAction === 'return'  ? '↩ Return for Correction' :
             '❌ Reject Document'
           }
-          onClose={() => { setWfAction(null); setWfPassword(''); setWfPasswordError('') }}
+          onClose={() => { setWfAction(null); setWfNote('') }}
         >
           {/* Info message — styled as info/warning, not error */}
           <div style={{
@@ -2310,51 +2302,13 @@ export default function DocumentDetail() {
             style={{ width:'100%', boxSizing:'border-box', marginBottom:14,
               fontFamily:'inherit', fontSize:13, borderRadius:7 }} />
 
-          {/* Password authentication — required for approve and reject */}
-          {wfAction !== 'return' && (
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display:'block', fontSize:12, fontWeight:600,
-                color:'#374151', marginBottom:4 }}>
-                🔐 Authenticate with your login password
-                <span style={{ color:'#A32D2D', marginLeft:4 }}>*</span>
-              </label>
-              <input
-                type="password"
-                value={wfPassword}
-                onChange={e => { setWfPassword(e.target.value); setWfPasswordError('') }}
-                placeholder="Enter your login password to sign this action…"
-                autoComplete="current-password"
-                style={{
-                  width:'100%', boxSizing:'border-box',
-                  borderColor: wfPasswordError ? '#E24B4A' : '#d1d5db',
-                  borderRadius:7,
-                }}
-                onKeyDown={e => e.key === 'Enter' && wfPassword && handleWfAction(wfAction)}
-              />
-              {/* Inline error — NOT a browser popup */}
-              {wfPasswordError && (
-                <div style={{
-                  marginTop:6, padding:'8px 12px', borderRadius:6,
-                  background:'#FCEBEB', border:'1px solid #E24B4A44',
-                  fontSize:12, color:'#A32D2D',
-                  display:'flex', alignItems:'center', gap:6,
-                }}>
-                  <span>⚠</span> {wfPasswordError}
-                </div>
-              )}
-              <div style={{ fontSize:11, color:'#9ca3af', marginTop:4 }}>
-                Your password is used as a digital signature and logged in the audit trail.
-              </div>
-            </div>
-          )}
 
           <div style={{ display:'flex', gap:8, justifyContent:'flex-end', paddingTop:4 }}>
             <Btn label="Cancel"
-              onClick={() => { setWfAction(null); setWfPassword(''); setWfPasswordError('') }} />
+              onClick={() => { setWfAction(null); setWfNote('') }} />
             <Btn
               label={wfAction === 'advance' ? '✅ Confirm Approve' : wfAction === 'return' ? '↩ Confirm Return' : '❌ Confirm Reject'}
               variant={wfAction === 'advance' ? 'success' : wfAction === 'return' ? 'warning' : 'danger'}
-              disabled={wfAction !== 'return' && !wfPassword}
               onClick={() => handleWfAction(wfAction)}
             />
           </div>

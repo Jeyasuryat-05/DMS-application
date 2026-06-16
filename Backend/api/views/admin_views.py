@@ -439,6 +439,7 @@ MASTER_DOC_TYPES = [
     {'name': 'SQA',                                           'code': 'SQA', 'auth_required': False, 'auth_code': ''},
     {'name': 'Technical',                                     'code': 'ZTE', 'auth_required': False, 'auth_code': ''},
     {'name': 'Technical Authorization',                       'code': 'ZTA', 'auth_required': False, 'auth_code': ''},
+    {'name': 'Technical Data Sheet',                          'code': 'TDS', 'auth_required': False, 'auth_code': ''},
     {'name': 'Technical Specification',                       'code': 'ZTS', 'auth_required': False, 'auth_code': ''},
     {'name': 'TEMPLATEHOLDER',                                'code': 'TEM', 'auth_required': False, 'auth_code': ''},
     {'name': 'Vendor Evaluation',                             'code': 'ZVE', 'auth_required': False, 'auth_code': ''},
@@ -499,6 +500,8 @@ WORKFLOW_MAP = {
     'QSR': _wf('Prepare', 'Approve'),
     # ZTE Technical — 4 step
     'ZTE': _wf('Prepare', 'Check', 'Review', 'Approve'),
+    # TDS Technical Data Sheet — 4 step
+    'TDS': _wf('Prepare', 'Check', 'Review', 'Approve'),
     # ZTS Technical Specification — 4 step
     'ZTS': _wf('Prepare', 'Check', 'Review', 'Approve'),
     # HSE — 3 step

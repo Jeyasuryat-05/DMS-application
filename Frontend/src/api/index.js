@@ -198,4 +198,14 @@ export const libraryAPI = {
   decideAccessRequest:   (id, data)        => api.post(`/library/access-requests/${id}/decide`, data),
 }
 
+// ─── SAP OData ────────────────────────────────────────────────────────────────
+export const sapAPI = {
+  status:    ()       => api.get('/sap/status'),
+  documents: ()       => api.get('/sap/documents'),
+  push:      (docId)  => api.post(`/sap/push/${docId}`),
+  testPush:  ()       => api.post('/sap/test-push'),
+  metadata:  ()       => api.get('/sap/metadata'),
+  validate:  (docNum) => api.get('/sap/validate', { params: { doc_number: docNum } }),
+}
+
 export default api

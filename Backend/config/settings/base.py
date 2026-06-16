@@ -106,6 +106,21 @@ EMAIL_USE_TLS     = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'DMS System <noreply@dms.local>')
 FRONTEND_URL      = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
+# ── SAP OData Integration ──────────────────────────────────────────────────────
+SAP_ODATA_ENABLED          = os.environ.get('SAP_ODATA_ENABLED', 'False').lower() == 'true'
+SAP_ODATA_URL              = os.environ.get('SAP_ODATA_URL', '')
+SAP_ODATA_USER             = os.environ.get('SAP_ODATA_USER', '')
+SAP_ODATA_PASSWORD         = os.environ.get('SAP_ODATA_PASSWORD', '')
+SAP_ODATA_CLIENT           = os.environ.get('SAP_ODATA_CLIENT', '120')
+SAP_ODATA_VERIFY_SSL       = os.environ.get('SAP_ODATA_VERIFY_SSL', 'False').lower() == 'true'
+SAP_ODATA_SOURCE_SYSTEM_ID = os.environ.get('SAP_ODATA_SOURCE_SYSTEM_ID', 'DMS')
+SAP_ODATA_DOC_TYPE         = os.environ.get('SAP_ODATA_DOC_TYPE', 'TDS')
+SAP_ODATA_DOC_PART         = os.environ.get('SAP_ODATA_DOC_PART', '000')
+SAP_ODATA_DOC_VERSION      = os.environ.get('SAP_ODATA_DOC_VERSION', '00')
+SAP_ODATA_LANGUAGE         = os.environ.get('SAP_ODATA_LANGUAGE', 'EN')
+SAP_ODATA_STORAGE_CATEGORY = os.environ.get('SAP_ODATA_STORAGE_CATEGORY', 'DMS_C1_ST')
+SAP_ODATA_DEFAULT_STATUS   = os.environ.get('SAP_ODATA_DEFAULT_STATUS', '30')
+
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600
 FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600
 

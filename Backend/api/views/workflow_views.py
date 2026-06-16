@@ -353,19 +353,6 @@ def workflow_action(request, doc_id):
     data = request.data
     action = data.get('action')
     note = data.get('note', '')
-    password = data.get('password', '')
-
-    if action in ('approve', 'reject'):
-        if not password:
-            return Response({'error': 'Password is required to authenticate your approval/rejection (digital signature).'}, status=400)
-        import bcrypt as _bcrypt
-        stored_hash = (request.user.hashed_password or '').encode()
-        try:
-            valid = _bcrypt.checkpw(password.encode(), stored_hash)
-        except Exception:
-            valid = False
-        if not valid:
-            return Response({'error': 'Incorrect password. Please enter your login password to authenticate this action.'}, status=401)
 
     ip = request.META.get('REMOTE_ADDR', '')
     task.digital_sig_log = {

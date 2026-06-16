@@ -455,6 +455,18 @@ def _create_document(request):
             action='Document Created', note=f'Type: {doc_type.name}',
         )
 
+        # Push to SAP OData (non-blocking — failure logged but does not abort)
+        try:
+            from api import sap_odata
+            logger.info('=== [SAP BREAKPOINT 1] Triggering SAP push for doc=%s type=%s ===',
+                        doc.doc_number, doc_type.code)
+            sap_odata.push_document_to_sap(doc)
+            logger.info('=== [SAP BREAKPOINT 1] SAP push completed for doc=%s ===', doc.doc_number)
+        except Exception as _sap_err:
+            import logging as _log
+            _log.getLogger(__name__).warning('=== [SAP BREAKPOINT 1] SAP push FAILED for %s: %s ===',
+                                             doc.doc_number, _sap_err)
+
         return Response({'id': doc.id, 'doc_number': doc.doc_number, 'message': 'Document created'}, status=201)
     except Exception:
         logger.exception('create_document error')
